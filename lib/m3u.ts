@@ -1,4 +1,4 @@
-import { Channel } from './types';
+import type { Channel } from './types';
 
 const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.avi', '.m4v', '.mov', '.webm'];
 const EPISODE_PATTERN = /\bs\d{1,2}\s?e\d{1,3}\b|\b\d{1,2}x\d{1,3}\b/i;

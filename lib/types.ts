@@ -58,6 +58,6 @@ export type Profile = {
   renamed: Record<string, string>;
   channelOrder: string[];
   groupOrder: string[];
-  continueWatching: { channelId: string; time: number }[];
+  continueWatching: { channelId: string; time: number; duration?: number; updatedAt?: number }[];
   watchHistory: string[];
 };

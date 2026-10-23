@@ -1,7 +1,91 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-html, body { background: #0b0d12; color: #e7eaf0; }
+
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+}
+
+html, body {
+  background: #000;
+  color: #f5f5f7;
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: -webkit-optimize-legibility;
+  touch-action: manipulation;
+}
+
 * { -webkit-tap-highlight-color: transparent; }
-.video-wrap video { width: 100%; height: 100%; background: black; }
-.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+input, select, textarea, button { font-size: 16px; }
+
+.scroll-y {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.scroll-x::-webkit-scrollbar { display: none; }
+.scroll-y::-webkit-scrollbar { width: 0; height: 0; }
+
+/* iOS frosted surfaces */
+.ios-blur {
+  background: rgba(22, 22, 24, 0.72);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  backdrop-filter: saturate(180%) blur(24px);
+}
+
+.ios-card {
+  background: rgba(28, 28, 30, 0.92);
+  border-radius: 14px;
+}
+
+.hairline-b { border-bottom: 0.5px solid rgba(255, 255, 255, 0.14); }
+.hairline-t { border-top: 0.5px solid rgba(255, 255, 255, 0.14); }
+
+/* Press states like a native app */
+.press:active { opacity: 0.55; transition: opacity 0.08s ease; }
+
+/* Bottom sheet */
+.sheet-in { animation: sheetIn 0.28s cubic-bezier(0.32, 0.72, 0, 1); }
+@keyframes sheetIn { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.fade-in { animation: fadeIn 0.22s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Full-screen player on iPhone portrait */
+.player-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: #000;
+}
+video::-webkit-media-controls { display: none !important; }
+video::-webkit-media-text-track-container { transform: var(--subtitle-y, translateY(0)); }
+
+img { -webkit-user-drag: none; user-select: none; }
+
+.shelf { display: flex; gap: 10px; padding: 0 16px; }
+.shelf > * { flex: 0 0 auto; }
+
+/* Player: portrait shows 16:9 video with info below; landscape video fills screen */
+.player-video-area video { width: 100%; height: 100%; object-fit: contain; }
+@media (orientation: portrait) {
+  .player-video-area { aspect-ratio: 16 / 9; height: auto; flex: none; }
+}
+@media (orientation: landscape) {
+  .player-video-area { height: 100dvh; width: 100%; flex: none !important; aspect-ratio: auto; }
+  .player-info { display: none; }
+}

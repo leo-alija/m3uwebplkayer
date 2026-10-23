@@ -1,3 +1,5 @@
+import { idbDel, idbGet, idbSet } from './idb';
+
 export function load<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') return fallback;
   try {
@@ -12,4 +14,15 @@ export function save<T>(key: string, value: T) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {}
+}
+
+/* Playlist can be tens of MB — lives in IndexedDB */
+export async function loadPlaylist<T>(): Promise<T | null> {
+  return idbGet<T>('playlist');
+}
+export async function savePlaylist<T>(playlist: T) {
+  await idbSet('playlist', playlist);
+}
+export async function clearPlaylist() {
+  await idbDel('playlist');
 }

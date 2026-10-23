@@ -1,4 +1,4 @@
-import { Channel, SeriesEpisode, SeriesFolder } from './types';
+import type { Channel, SeriesEpisode, SeriesFolder } from './types';
 
 const seasonEpisodePattern = /S\s*(\d{1,3})\s*[-._ ]?\s*E\s*(\d{1,4})/i;
 const crossPattern = /\b(\d{1,3})\s*x\s*(\d{1,4})\b/i;
