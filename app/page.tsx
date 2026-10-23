@@ -153,7 +153,8 @@ export default function Home() {
     try {
       const url = buildXtreamM3uUrl(xtream.host, xtream.user, xtream.pass);
       const text = await fetchText(url);
-      await importPlaylistText(text, xtream.host);
+      const epg = `${xtream.host.replace(/\/+$/, '')}/xmltv.php?username=${encodeURIComponent(xtream.user)}&password=${encodeURIComponent(xtream.pass)}`;
+      await importPlaylistText(text, xtream.host, epg);
     } catch (e: any) { setImportError(e?.message || 'import failed'); }
     finally { setImporting(false); }
   }
