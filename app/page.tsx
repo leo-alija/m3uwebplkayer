@@ -52,6 +52,7 @@ export default function Home() {
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Channel | null>(null);
+  const [selectedSeries, setSelectedSeries] = useState<SeriesFolder | null>(null);
   const [tab, setTab] = useState<Tab>('live');
   const [query, setQuery] = useState('');
   const [group, setGroup] = useState('all');
@@ -402,10 +403,7 @@ export default function Home() {
             {tab === 'series' ? (
               <div className="p-2 space-y-2">
                 {seriesFolders.map((f) => (
-                  <button key={f.name} onClick={() => {
-                    // select first episode
-                    if (f.episodes[0]) selectChannel(f.episodes[0].channel);
-                  }} className="w-full text-left bg-white/5 rounded-xl p-3 flex gap-3 hover:bg-white/10">
+                  <button key={f.name} onClick={() => { setSelectedSeries(f); if (tmdbKey) fetchTmdb(f.name, 'tv'); }} className="w-full text-left bg-white/5 rounded-xl p-3 flex gap-3 hover:bg-white/10">
                     {f.posterUrl || f.tmdbPosterUrl ? <img src={f.tmdbPosterUrl || f.posterUrl} alt="" className="w-16 h-24 rounded object-cover bg-white/5" /> : <div className="w-16 h-24 rounded bg-white/10 flex items-center justify-center text-xs text-center p-1">{f.name.slice(0, 12)}</div>}
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold truncate">{f.name}</div>
@@ -519,6 +517,37 @@ export default function Home() {
           <button key={t} onClick={() => setTab(t)} className={`px-2 py-1.5 rounded-lg text-xs capitalize ${tab === t ? 'text-orange-400' : 'text-white/60'}`}>{t}</button>
         ))}
       </nav>
+
+      {selectedSeries && (
+        <div className="fixed inset-0 z-30 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-[#14171f] rounded-2xl p-5 w-full max-w-2xl space-y-3 border border-white/10 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-bold">{selectedSeries.name}</h2>
+              <button onClick={() => setSelectedSeries(null)} className="text-white/60">✕</button>
+            </div>
+            {meta[selectedSeries.name] && (
+              <div className="bg-white/5 rounded-lg p-3 text-sm space-y-1">
+                <div className="text-xs text-white/60">{meta[selectedSeries.name].overview}</div>
+                {meta[selectedSeries.name].vote_average && <div className="text-xs text-orange-300">Rating: {meta[selectedSeries.name].vote_average}</div>}
+              </div>
+            )}
+            {Array.from(new Set(selectedSeries.episodes.map((e) => e.seasonNumber))).sort((a,b)=>a-b).map((sn) => (
+              <div key={sn} className="space-y-1">
+                <div className="font-semibold text-sm text-white/70">Season {sn}</div>
+                {selectedSeries.episodes.filter((e) => e.seasonNumber === sn).sort((a,b)=>a.episodeNumber-b.episodeNumber).map((e) => (
+                  <button key={e.channel.id} onClick={() => { selectChannel(e.channel); setSelectedSeries(null); }} className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 flex items-center gap-3">
+                    <div className="text-xs text-white/40 w-8">E{e.episodeNumber}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate">{e.episodeTitle}</div>
+                      <div className="truncate text-xs text-white/40">{e.channel.name}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {tab === 'settings' && (
         <div className="fixed inset-0 z-30 bg-black/80 flex items-center justify-center p-4">
