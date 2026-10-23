@@ -4,6 +4,16 @@ import { useMemo, useState } from 'react';
 import { Channel, SeriesFolder, SeriesEpisode } from '@/lib/types';
 import { Sheet, IconStar, IconPlayCircle, IconShare, Chip, Poster } from './ui';
 import { TmdbMeta } from '@/lib/tmdb';
+import { canDownload } from '@/lib/downloads';
+
+function IconDownload({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={className}>
+      <path d="M12 4v10m0 0 4-4m-4 4-4-4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 17v1a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 type Props = {
   kind: 'movie' | 'series';
@@ -15,6 +25,8 @@ type Props = {
   onFav: () => void;
   onPlayMovie?: () => void;
   onPlayEpisode?: (ep: SeriesEpisode) => void;
+  dl?: Record<string, { pct: number; done?: boolean }>;
+  onDownload?: (ch: Channel) => void;
   onClose: () => void;
 };
 
@@ -96,6 +108,22 @@ export default function DetailSheet(p: Props) {
               </div>
               <span className="text-[12px] text-[#0a84ff]">Play</span>
             </button>
+            {canDownload(p.channel.url) && (
+              (() => {
+                const st = p.dl?.[p.channel!.id];
+                return (
+                  <button disabled={!!st && !st.done} onClick={() => p.onDownload?.(p.channel!)}
+                    className="press w-full ios-card px-4 py-3.5 mt-2 flex items-center gap-3 text-left">
+                    <IconDownload className="w-8 h-8 text-white/50" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[15px]">{st?.done ? 'Available offline' : st ? `Downloading… ${st.pct}%` : 'Download'}</div>
+                      <div className="text-[11px] text-white/35 truncate">{st?.done ? 'Plays without a connection' : 'Saved on this device — plays offline'}</div>
+                    </div>
+                    <span className={`text-[12px] ${st?.done ? 'text-green-400' : 'text-[#0a84ff]'}`}>{st?.done ? '✓' : st ? '…' : 'Save'}</span>
+                  </button>
+                );
+              })()
+            )}
           </div>
         )}
 
@@ -108,16 +136,32 @@ export default function DetailSheet(p: Props) {
               </div>
             )}
             <div className="ios-card divide-y divide-white/5">
-              {episodes.map((e) => (
-                <button key={e.channel.id} onClick={() => p.onPlayEpisode?.(e)} className="press w-full text-left flex items-center gap-3 px-3 py-3">
-                  <div className="w-10 shrink-0 text-center rounded-lg py-1.5 text-[13px] font-mono bg-white/6 text-white/60">E{e.episodeNumber}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[15px] truncate">{e.episodeTitle}</div>
-                    <div className="text-[11px] text-white/35 truncate">{e.channel.qualityTag || e.channel.group}</div>
+              {episodes.map((e) => {
+                const st = p.dl?.[e.channel.id];
+                return (
+                  <div key={e.channel.id} role="button" tabIndex={0}
+                    onClick={() => p.onPlayEpisode?.(e)}
+                    onKeyDown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') p.onPlayEpisode?.(e); }}
+                    className="press w-full text-left flex items-center gap-3 px-3 py-3 cursor-pointer select-none active:bg-white/5">
+                    <div className="w-10 shrink-0 text-center rounded-lg py-1.5 text-[13px] font-mono bg-white/6 text-white/60">E{e.episodeNumber}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[15px] truncate">{e.episodeTitle}</div>
+                      <div className="text-[11px] text-white/35 truncate">{e.channel.qualityTag || e.channel.group}</div>
+                    </div>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <IconPlayCircle className="w-7 h-7 text-white/30" />
+                      {canDownload(e.channel.url) && (
+                        <button onClick={(ev) => { ev.stopPropagation(); p.onDownload?.(e.channel); }}
+                          title="Download" className="press p-1.5 rounded-lg text-white/55">
+                          {st?.done ? <span className="text-green-400 text-[14px] font-mono px-0.5">✓</span>
+                            : st ? <span className="text-[10px] font-mono text-[#ff7a2a] px-0.5">{st.pct}%</span>
+                              : <IconDownload className="w-5 h-5" />}
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <IconPlayCircle className="w-7 h-7 text-white/30" />
-                </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

@@ -5,6 +5,7 @@ import Hls from 'hls.js';
 import { Channel, Program, SeriesEpisode } from '@/lib/types';
 import { load, save } from '@/lib/storage';
 import { NATIVE_HLS } from '@/lib/env';
+import { canDownload, isDownloaded, getDownloadBlob } from '@/lib/downloads';
 import { IconClose, IconStar, IconPip, IconPlus, IconPlayCircle, IconPauseCircle, IconSpeed } from './ui';
 
 type Props = {
@@ -54,9 +55,33 @@ export default function Player(p: Props) {
   const [rate, setRate] = useState(1);
   const [flash, setFlash] = useState<'back' | 'fwd' | null>(null);
   const [nextCountdown, setNextCountdown] = useState<null | { ep: SeriesEpisode; left: number }>(null);
+  const [offlineUrl, setOfflineUrl] = useState<string | null>(null);
+  const [offlineResolved, setOfflineResolved] = useState(false);
 
   const live = p.channel.contentType !== 'MOVIE' && p.channel.contentType !== 'SERIES';
   const showSeek = !live && duration > 0;
+
+  /* resolve offline copy (if this item was downloaded) */
+  useEffect(() => {
+    let url: string | null = null;
+    let cancelled = false;
+    setOfflineUrl(null);
+    setOfflineResolved(false);
+    (async () => {
+      try {
+        if (canDownload(p.channel.url) && await isDownloaded(p.channel.id)) {
+          const blob = await getDownloadBlob(p.channel.id);
+          if (blob && !cancelled) {
+            url = URL.createObjectURL(blob);
+            setOfflineUrl(url);
+          }
+        }
+      } finally {
+        if (!cancelled) setOfflineResolved(true);
+      }
+    })();
+    return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
+  }, [p.channel.id, p.channel.url]);
 
   /* next episode for series */
   const nextEp = useMemo(() => {
@@ -78,11 +103,11 @@ export default function Player(p: Props) {
   /* ---------- source attach ---------- */
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !p.channel) return;
+    if (!video || !p.channel || !offlineResolved) return;
     setPlaying(false); setBuffering(true); setError(''); setTime(0); setDuration(0); setBuffered(0);
     setLevels([]); setCurLevel(-1); setAudioTracks([]); setAudioTrack(-1); setSubTracks([]); setSubTrack(-1); setRate(1); setNextCountdown(null);
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
-    const url = p.channel.url;
+    const url = offlineUrl || p.channel.url;
     const isHlsUrl = /m3u8/.test(url);
 
     if (isHlsUrl && !isIOS && Hls.isSupported()) {
@@ -140,7 +165,7 @@ export default function Player(p: Props) {
       if (!cancelled) setBuffering(false);
     });
     return () => { cancelled = true; };
-  }, [p.channel.id]);
+  }, [p.channel.id, offlineResolved, offlineUrl]);
 
   /* cleanup */
   useEffect(() => () => {
@@ -243,7 +268,7 @@ export default function Player(p: Props) {
       if (e.key === ' ' || e.key === 'k') { e.preventDefault(); v.paused ? v.play().catch(() => {}) : v.pause(); showControls(); }
       else if (e.key === 'ArrowRight') { if (!live) { v.currentTime += 10; setFlash('fwd'); setTimeout(() => setFlash(null), 400); showControls(); } }
       else if (e.key === 'ArrowLeft') { if (!live) { v.currentTime -= 10; setFlash('back'); setTimeout(() => setFlash(null), 400); showControls(); } }
-      else if (e.key === 'm' || e.key === 'M') { v.muted = !v.muted; showControls(); }
+      else if (e.key === 'm' || e.key === 'M') { v.muted = !v.muted; setMuted(v.muted); showControls(); }
       else if (e.key === 'ArrowDown') v.volume = Math.max(0, v.volume - 0.1);
       else if (e.key === 'ArrowUp') v.volume = Math.min(1, v.volume + 0.1);
       else if (e.key === 'Escape') p.onClose();
@@ -264,7 +289,7 @@ export default function Player(p: Props) {
   }
   function toggleMute() {
     const v = videoRef.current;
-    if (v) { v.muted = !v.muted; showControls(); }
+    if (v) { v.muted = !v.muted; setMuted(v.muted); showControls(); }
   }
   function togglePip(e?: React.MouseEvent) {
     e?.stopPropagation();
@@ -348,6 +373,7 @@ export default function Player(p: Props) {
               <div className="truncate text-[15px] font-bold leading-tight">{p.channel.name}</div>
               <div className="text-[11px] text-white/65 mt-0.5">
                 {live && <span className="text-red-400 font-bold mr-1">● LIVE</span>}
+                {offlineUrl && <span className="text-green-400 font-bold mr-1">OFFLINE</span>}
                 {p.channel.qualityTag && <span className="mr-1">{p.channel.qualityTag}</span>}
                 {p.channel.groups?.slice(0, 2).join(' · ') || p.channel.group}
               </div>
@@ -405,7 +431,7 @@ export default function Player(p: Props) {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-6 h-6"><path d="M13 8l5 4-5 4V8zM11 12l-5-4v8l5-4z" strokeLinejoin="round" strokeLinecap="round" /></svg>
               </button>
               <button onClick={(e) => { e.stopPropagation(); toggleMute(); }} className="press p-2.5" title="Mute">
-                {muted || !videoRef.current?.volume ? (
+                {muted ? (
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-6 h-6"><path d="M4 9v6h4l5 4V5L8 9H4z" strokeLinejoin="round" /><path d="m16 9 5 5M21 9l-5 5" strokeLinecap="round" /></svg>
                 ) : (
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={`w-6 h-6 ${muted ? 'opacity-40' : ''}`}><path d="M4 9v6h4l5 4V5L8 9H4z" strokeLinejoin="round" /><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" strokeLinecap="round" /></svg>

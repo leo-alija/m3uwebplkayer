@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Channel, Playlist } from '@/lib/types';
 import { Sheet, Button, IconChevron, GroupRow, Row, IconTrash } from './ui';
+import { getDownloadIndex, removeDownload, fmtBytes, DownloadInfo } from '@/lib/downloads';
 
 export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hiddenCount, tmdbKey, setTmdbKey, status,
   hideGroup, renameGroup, reorderGroup, unhideAll, moveToGroup, allChannels,
@@ -24,6 +25,8 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
   isStandalone: boolean; playbackCount: number; mvCount: number;
 }) {
   const [moveId, setMoveId] = useState('');
+  const [dl, setDl] = useState<DownloadInfo[]>([]);
+  useEffect(() => { if (open) getDownloadIndex().then(setDl); }, [open]);
   const list = groups.length ? groups : [];
 
   return (
@@ -54,6 +57,21 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
               <span>Profiles</span><IconChevron className="w-4 h-4" />
             </button>
           </Row>
+        </GroupRow>
+
+        <GroupRow title="Saved offline">
+          {dl.length === 0 ? (
+            <div className="px-4 py-3 text-[14px] text-white/40">Nothing saved yet — open a film and tap Download.</div>
+          ) : dl.map((d) => (
+            <Row key={d.id} className="py-2">
+              <div className="flex-1 min-w-0">
+                <div className="text-[15px] truncate">{d.name}</div>
+                <div className="text-[12px] text-white/35">{fmtBytes(d.bytes)} · {new Date(d.savedAt).toLocaleDateString()}</div>
+              </div>
+              <button onClick={async () => { await removeDownload(d.id); setDl(await getDownloadIndex()); }}
+                className="press p-2 text-red-400" title="Delete"><IconTrash className="w-4 h-4" /></button>
+            </Row>
+          ))}
         </GroupRow>
 
         <GroupRow title="TMDb metadata (optional)">

@@ -5,6 +5,7 @@ import { parseXMLTV, nowProgram, parseXmltvDate } from '@/lib/epg';
 import { load, save, loadPlaylist, savePlaylist, clearPlaylist as clearPlaylistStore } from '@/lib/storage';
 import { groupIntoFolders } from '@/lib/series';
 import { getTmdb } from '@/lib/tmdb';
+import { downloadVideo, canDownload, getDownloadIndex } from '@/lib/downloads';
 import { Channel, Playlist, Program, SeriesFolder, SeriesEpisode, Profile } from '@/lib/types';
 import Player from '@/components/player';
 import Multiview from '@/components/multiview';
@@ -43,6 +44,8 @@ export default function Home() {
   const [selected, setSelected] = useState<{ channel: Channel; resume: number } | null>(null);
   const [detail, setDetail] = useState<{ kind: 'movie' | 'series'; title: string; folder?: SeriesFolder; channel?: Channel } | null>(null);
   const [gridView, setGridView] = useState(false);
+  const [downloads, setDownloads] = useState<Record<string, { pct: number; done?: boolean }>>({});
+  const dlAbort = useRef<Record<string, AbortController>>({});
 
   const [mv, setMv] = useState<Channel[]>([]);
   const [showMv, setShowMv] = useState(false);
@@ -286,6 +289,34 @@ export default function Home() {
   function detailPlayEpisode(ep: SeriesEpisode) {
     setDetail(null);
     selectChannel(ep.channel);
+  }
+
+  /* ---------- downloads (offline) ---------- */
+  useEffect(() => {
+    (async () => {
+      const idx = await getDownloadIndex();
+      const m: Record<string, { pct: number; done?: boolean }> = {};
+      for (const d of idx) m[d.id] = { pct: 100, done: true };
+      setDownloads(m);
+    })();
+  }, []);
+
+  async function startDownload(ch: Channel) {
+    if (downloads[ch.id]?.done || dlAbort.current[ch.id]) { flash('Already saved offline'); return; }
+    if (!canDownload(ch.url)) { flash('Only direct files (mp4/mkv…) can be saved offline'); return; }
+    const ac = new AbortController();
+    dlAbort.current[ch.id] = ac;
+    setDownloads((m) => ({ ...m, [ch.id]: { pct: 0 } }));
+    try {
+      await downloadVideo(ch.id, ch.url, ch.name, (pct) => setDownloads((m) => ({ ...m, [ch.id]: { pct } })), ac.signal);
+      setDownloads((m) => ({ ...m, [ch.id]: { pct: 100, done: true } }));
+      flash('Saved for offline');
+    } catch (e: any) {
+      setDownloads((m) => { const { [ch.id]: _drop, ...rest } = m; return rest; });
+      if (e?.name !== 'AbortError') flash(e?.message || 'Download failed');
+    } finally {
+      delete dlAbort.current[ch.id];
+    }
   }
 
   /* ---------- derived ---------- */
@@ -608,6 +639,8 @@ export default function Home() {
           onFav={() => detail.channel && toggleFavorite(detail.channel.id)}
           onPlayMovie={detailPlaySection}
           onPlayEpisode={detailPlayEpisode}
+          dl={downloads}
+          onDownload={startDownload}
           onClose={() => setDetail(null)} />
       )}
 
