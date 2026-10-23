@@ -6,7 +6,13 @@ export type Channel = {
   group?: string;
   tvgId?: string;
   tvgName?: string;
-  catchup?: string;
+  channelNumber?: number;
+  contentType?: 'LIVE' | 'MOVIE' | 'SERIES';
+  headers?: Record<string, string>;
+  catchupType?: string | null;
+  catchupDays?: number | null;
+  catchupSource?: string | null;
+  qualityTag?: string | null;
 };
 
 export type Program = {
@@ -21,4 +27,37 @@ export type Playlist = {
   channels: Channel[];
   epgUrl?: string;
   importedAt: number;
+};
+
+export type SeriesEpisode = {
+  channel: Channel;
+  seasonNumber: number;
+  episodeNumber: number;
+  episodeTitle: string;
+};
+
+export type SeriesFolder = {
+  name: string;
+  posterUrl?: string;
+  groupTitles: string[];
+  episodes: SeriesEpisode[];
+  seasonCount: number;
+  episodeCount: number;
+  tmdbPosterUrl?: string;
+  tmdbBackdropUrl?: string;
+  tmdbLogoUrl?: string;
+};
+
+export type Profile = {
+  id: string;
+  name: string;
+  pin?: string;
+  favorites: string[];
+  recents: string[];
+  hiddenGroups: string[];
+  renamed: Record<string, string>;
+  channelOrder: string[];
+  groupOrder: string[];
+  continueWatching: { channelId: string; time: number }[];
+  watchHistory: string[];
 };
