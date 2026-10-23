@@ -1,6 +1,6 @@
 'use client';
 
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 
 /* ---------- Icons (SF-Symbols inspired, stroke based) ---------- */
 
@@ -112,23 +112,51 @@ export const IconBackChevron = ({ className }: IProps) => (
 /* ---------- Sheet (iOS bottom sheet) ---------- */
 
 export function Sheet({ open, title, onClose, children, tall }: { open: boolean; title?: string; onClose: () => void; children: ReactNode; tall?: boolean }) {
+  const drag = useRef({ y: 0, dy: 0, active: false });
+  const bodyRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
   }, [open, onClose]);
 
   if (!open) return null;
+
+  const setSheetY = (px: number) => {
+    if (bodyRef.current) bodyRef.current.style.transform = px > 0 ? `translateY(${px}px)` : '';
+  };
+
   return (
     <div className="fixed inset-0 z-40">
       <div className="absolute inset-0 bg-black/60 fade-in" onClick={onClose} />
-      <div className={`absolute inset-x-0 bottom-0 md:inset-y-0 md:right-auto md:left-1/2 md:-translate-x-1/2 md:bottom-6 md:top-6 md:w-[560px] sheet-in`}>
-        <div className="bg-[#1c1c1e] rounded-t-2xl md:rounded-2xl border-t md:border border-white/10 flex flex-col"
+      <div className="absolute inset-x-0 bottom-0 md:inset-y-0 md:right-auto md:left-1/2 md:-translate-x-1/2 md:bottom-6 md:top-6 md:w-[560px] sheet-in">
+        <div ref={bodyRef}
+          className="bg-[#1c1c1e] rounded-t-2xl md:rounded-2xl border-t md:border border-white/10 flex flex-col transition-transform will-change-transform"
           style={{ maxHeight: tall ? '100dvh' : '92dvh', paddingBottom: 'var(--safe-b, 0px)' }}>
-          <button className="w-full pt-3 pb-1.5 flex justify-center press" onClick={onClose} aria-label="Close">
-            <div className="w-10 h-1.5 rounded-full bg-white/30" />
-          </button>
+          <div
+            className="w-full pt-3 pb-1.5 flex justify-center touch-none cursor-grab active:cursor-grabbing"
+            onTouchStart={(e) => { drag.current = { y: e.touches[0].clientY, dy: 0, active: true }; }}
+            onTouchMove={(e) => {
+              if (!drag.current.active) return;
+              drag.current.dy = e.touches[0].clientY - drag.current.y;
+              setSheetY(drag.current.dy);
+            }}
+            onTouchEnd={() => {
+              drag.current.active = false;
+              if (drag.current.dy > 110) onClose(); else setSheetY(0);
+            }}
+            role="presentation">
+            <button onClick={onClose} className="press" aria-label="Close">
+              <div className="w-10 h-1.5 rounded-full bg-white/30" />
+            </button>
+          </div>
           {title && <div className="px-5 pb-2 pt-1 flex items-center justify-between">
             <div className="text-[20px] font-bold">{title}</div>
             <button onClick={onClose} className="press text-white/60"><IconClose className="w-5 h-5" /></button>
@@ -173,12 +201,22 @@ export function Chip({ label, active, onClick }: { label: string; active?: boole
   );
 }
 
-export function Poster({ src, className }: { src?: string; className?: string }) {
+export function Poster({ src, label, className }: { src?: string; label?: string; className?: string }) {
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const has = !!src && !failed;
   return (
-    <img src={has && src ? src : ''} alt="" loading="lazy"
-      onError={() => setFailed(true)}
-      className={`bg-gradient-to-br from-[#3a3a3c] to-[#1c1c1e] object-cover ${className || ''}`} />
+    <div className={`relative overflow-hidden ${className || ''}`}>
+      {!has && (
+        <div className="absolute inset-0 bg-gradient-to-br from-[#3a3a3c] to-[#1c1c1e] flex items-end p-2">
+          {label && <div className="text-white/60 text-[11px] font-semibold leading-tight line-clamp-3">{label}</div>}
+        </div>
+      )}
+      {has && (
+        <img src={src} alt="" loading="lazy" draggable={false}
+          onError={() => setFailed(true)} onLoad={() => setLoaded(true)}
+          className={`bg-gradient-to-br from-[#3a3a3c] to-[#1c1c1e] object-cover w-full h-full transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`} />
+      )}
+    </div>
   );
 }

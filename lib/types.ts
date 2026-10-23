@@ -4,6 +4,7 @@ export type Channel = {
   url: string;
   logo?: string;
   group?: string;
+  groups?: string[];
   tvgId?: string;
   tvgName?: string;
   channelNumber?: number;

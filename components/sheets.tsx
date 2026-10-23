@@ -1,18 +1,17 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Channel, Playlist, Profile, SeriesFolder, SeriesEpisode } from '@/lib/types';
+import { Channel, Playlist, Profile, SeriesFolder } from '@/lib/types';
 import { Sheet, Button, Chip, GroupRow, Row, IconChevron, IconClose, IconStar, IconPlayCircle, Poster, IconTrash } from './ui';
 
 /* ================= Import ================= */
 
-export function ImportSheet({ open, onClose, url, setUrl, xtream, setXtream, importing, error, onUrl, onFile, onXtream, hasPlaylist, onChangePlaylist }: {
+export function ImportSheet({ open, onClose, url, setUrl, xtream, setXtream, importing, error, onUrl, onFile, onXtream }: {
   open: boolean; onClose: () => void;
   url: string; setUrl: (v: string) => void;
   xtream: { host: string; user: string; pass: string }; setXtream: (v: any) => void;
   importing: boolean; error: string;
   onUrl: () => void; onFile: (f: File) => void; onXtream: () => void;
-  hasPlaylist: boolean; onChangePlaylist: () => void;
 }) {
   return (
     <Sheet open={open} title="Add playlist" onClose={onClose}>
@@ -49,60 +48,9 @@ export function ImportSheet({ open, onClose, url, setUrl, xtream, setXtream, imp
         </GroupRow>
 
         {error && <div className="mx-4 text-red-400 text-[14px]">{error}</div>}
-        {hasPlaylist && (
-          <div className="px-1">
-            <button onClick={onChangePlaylist} className="press w-full text-center text-[15px] text-red-400 py-2.5">Replace current playlist</button>
-          </div>
-        )}
+        {importing && <div className="mx-4 text-white/50 text-[13px]">Fetching the playlist. Large lists can take a while…</div>}
         <div className="text-center text-[12px] text-white/35 px-6 leading-relaxed">
           Playlists are yours to supply — nothing is bundled, hosted or recommended. Import can take a moment for large playlists.
-        </div>
-      </div>
-    </Sheet>
-  );
-}
-
-/* ================= Series detail ================= */
-
-export function SeriesSheet({ folder, meta, onClose, onPlay, continueId }: {
-  folder: SeriesFolder; meta?: any; onClose: () => void;
-  onPlay: (ep: SeriesEpisode) => void; continueId?: string | null;
-}) {
-  const seasons = useMemo(
-    () => Array.from(new Set(folder.episodes.map((e) => e.seasonNumber))).sort((a, b) => a - b), [folder]);
-  const [season, setSeason] = useState(seasons.includes(1) ? 1 : seasons[0] || 1);
-  const episodes = folder.episodes.filter((e) => e.seasonNumber === season).sort((a, b) => a.episodeNumber - b.episodeNumber);
-  const poster = meta?.poster_path ? `https://image.tmdb.org/t/p/w300${meta.poster_path}` : folder.tmdbPosterUrl || folder.posterUrl;
-
-  return (
-    <Sheet open onClose={onClose} tall>
-      <div className="pb-6">
-        <div className="flex gap-4 px-4 pt-2 pb-4">
-          <Poster src={poster} className="w-24 h-36 rounded-lg shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="text-[20px] font-bold leading-tight">{folder.name}</div>
-            <div className="text-[13px] text-white/50 mt-0.5">{folder.episodeCount} episodes · {seasons.length} season{seasons.length === 1 ? '' : 's'}</div>
-            {meta?.vote_average > 0 && <div className="text-[13px] text-[#ffd60a] mt-1">★ {meta.vote_average.toFixed(1)}</div>}
-            {meta?.overview && <div className="text-[13px] text-white/60 mt-1.5 line-clamp-4">{meta.overview}</div>}
-            {meta?.genres && <div className="text-[12px] text-white/40 mt-1.5">{meta.genres.map((g: any) => g.name).join(', ')}</div>}
-          </div>
-        </div>
-        {seasons.length > 1 && (
-          <div className="scroll-x flex gap-2 px-4 pb-3">
-            {seasons.map((s) => <Chip key={s} label={`Season ${s}`} active={s === season} onClick={() => setSeason(s)} />)}
-          </div>
-        )}
-        <div className="ios-card mx-4 divide-y divide-white/5">
-          {episodes.map((e) => (
-            <button key={e.channel.id} onClick={() => onPlay(e)} className="press w-full text-left flex items-center gap-3 px-3 py-2.5">
-              <div className={`w-10 shrink-0 text-center rounded-md py-1 text-[13px] font-mono ${e.channel.id === continueId ? 'bg-[#ff7a2a] text-black' : 'bg-white/5 text-white/50'}`}>E{e.episodeNumber}</div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[15px] truncate">{e.episodeTitle}</div>
-                <div className="text-[11px] text-white/35 truncate">{e.channel.qualityTag || e.channel.group}</div>
-              </div>
-              <IconPlayCircle className="w-7 h-7 text-white/35" />
-            </button>
-          ))}
         </div>
       </div>
     </Sheet>
@@ -201,9 +149,10 @@ export function PinOverlay({ profile, onResolve, onCancel }: { profile: Profile;
 
 /* ================= Search ================= */
 
-export function SearchOverlay({ channels, series, onClose, onPlayChannel, onOpenSeries, favorites }: {
+export function SearchOverlay({ channels, series, onClose, onPlayChannel, onOpenSeries, onOpenMovie, favorites }: {
   channels: Channel[]; series: SeriesFolder[]; favorites: Set<string>;
   onClose: () => void; onPlayChannel: (c: Channel) => void; onOpenSeries: (f: SeriesFolder) => void;
+  onOpenMovie: (c: Channel) => void;
 }) {
   const [q, setQ] = useState('');
   useEffect(() => { setTimeout(() => document.getElementById('search-field')?.focus(), 60); }, []);
@@ -254,7 +203,20 @@ export function SearchOverlay({ channels, series, onClose, onPlayChannel, onOpen
           <div className="pt-24 text-center text-white/35 text-[14px]">No results</div>
         )}
         <Section title="Live">{live.map(chRow)}</Section>
-        <Section title="Films">{movies.map(chRow)}</Section>
+        <Section title="Films">{
+          movies.map((c) => (
+            <Row key={c.id} className="py-1">
+              <button onClick={() => onOpenMovie(c)} className="press flex items-center gap-3 flex-1 min-w-0 text-left">
+                <Poster src={c.logo} className="w-9 h-14 rounded-md shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[15px] truncate">{c.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')}</div>
+                  <div className="text-[11px] text-white/35 truncate">{c.qualityTag || c.group}</div>
+                </div>
+                <IconChevron className="w-4 h-4 text-white/25" />
+              </button>
+            </Row>
+          ))
+        }</Section>
         <Section title="Series">
           {seriesMatches.map((f) => (
             <Row key={f.name} className="py-1">

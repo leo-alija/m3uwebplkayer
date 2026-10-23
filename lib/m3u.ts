@@ -89,6 +89,7 @@ type Pending = {
   name: string;
   logo?: string;
   group: string;
+  groups: string[];
   url: string;
   tvgId?: string;
   explicitNumber?: number;
@@ -152,7 +153,11 @@ export function parseM3U(text: string): { channels: Channel[]; epgUrl?: string }
 
     if (expectingUrl) {
       const name = (attributes['tvg-name'] && attributes['tvg-name'].trim()) || displayName || `Channel ${entries.length + 1}`;
-      const group = (attributes['group-title'] && attributes['group-title'].trim()) || extGroup || 'Uncategorized';
+      const rawGroup = (attributes['group-title'] && attributes['group-title'].trim()) || extGroup || 'Uncategorized';
+      const groups = rawGroup.split(/[;|]+/).map((g) => g.trim()).filter(Boolean).length
+        ? rawGroup.split(/[;|]+/).map((g) => g.trim()).filter(Boolean)
+        : ['Uncategorized'];
+      const group = groups[0];
       const catchupType = normaliseCatchupType((attributes['catchup'] || headerCatchup['catchup'] || '').trim().toLowerCase()) ;
       const catchupDaysRaw = attributes['catchup-days'] || attributes['tvg-rec'] || headerCatchup['catchup-days'];
       const catchupDays = catchupDaysRaw ? parseInt(catchupDaysRaw, 10) : null;
@@ -162,6 +167,7 @@ export function parseM3U(text: string): { channels: Channel[]; epgUrl?: string }
         name,
         logo: attributes['tvg-logo']?.trim() || undefined,
         group,
+        groups,
         url: line,
         tvgId: attributes['tvg-id']?.trim() || undefined,
         explicitNumber: (() => {
@@ -196,6 +202,7 @@ export function parseM3U(text: string): { channels: Channel[]; epgUrl?: string }
     url: e.url,
     logo: e.logo,
     group: e.group,
+    groups: e.groups,
     tvgId: e.tvgId,
     tvgName: attributes['tvg-name'] || undefined,
     channelNumber: e.explicitNumber != null ? e.explicitNumber : nextImplicit++,

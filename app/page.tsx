@@ -4,12 +4,14 @@ import { parseM3U, buildXtreamM3uUrl } from '@/lib/m3u';
 import { parseXMLTV, nowProgram, parseXmltvDate } from '@/lib/epg';
 import { load, save, loadPlaylist, savePlaylist, clearPlaylist as clearPlaylistStore } from '@/lib/storage';
 import { groupIntoFolders } from '@/lib/series';
+import { getTmdb } from '@/lib/tmdb';
 import { Channel, Playlist, Program, SeriesFolder, SeriesEpisode, Profile } from '@/lib/types';
-import Hls from 'hls.js';
 import Player from '@/components/player';
 import Multiview from '@/components/multiview';
-import { ImportSheet, SeriesSheet, ProfilesSheet, PinOverlay, SearchOverlay } from '@/components/sheets';
+import DetailSheet from '@/components/detail';
+import { ImportSheet, ProfilesSheet, PinOverlay, SearchOverlay } from '@/components/sheets';
 import { SettingsSheet } from '@/components/settings';
+import { Hero, Shelf, LiveTile, PosterCard, Aurora, Skeletons, GenreStrip, type HeroSlide } from '@/components/home-flix';
 import { IconHome, IconLive, IconSeries, IconMovie, IconGuide, IconSearch, IconSettings, IconStar, IconPlus, IconChevron, IconPlayCircle, Poster, Chip, IconClose } from '@/components/ui';
 
 type Tab = 'home' | 'live' | 'series' | 'movies' | 'guide';
@@ -19,10 +21,6 @@ const DEFAULT_PROFILE: Profile = {
   channelOrder: [], groupOrder: [], continueWatching: [], watchHistory: [],
 };
 
-function newProfile(name: string): Profile {
-  return { ...DEFAULT_PROFILE, id: `p_${Date.now()}`, name };
-}
-
 const isIOS = typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
 export default function Home() {
@@ -31,10 +29,10 @@ export default function Home() {
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [tab, setTab] = useState<Tab>('home');
-  const [group, setGroup] = useState('all');
+  const [liveGroupPick, setLiveGroupPick] = useState('all');
   const [liveFilter, setLiveFilter] = useState('');
   const [epg, setEpg] = useState<Record<string, Program[]>>({});
-  const [visibleCount, setVisibleCount] = useState(120);
+  const [visible, setVisible] = useState<Record<string, number>>({ live: 120, series: 90, movies: 60, guide: 80 });
 
   const [showImport, setShowImport] = useState(false);
   const [importUrl, setImportUrl] = useState('');
@@ -43,8 +41,8 @@ export default function Home() {
   const [xtream, setXtream] = useState({ host: '', user: '', pass: '' });
 
   const [selected, setSelected] = useState<{ channel: Channel; resume: number } | null>(null);
-  const [selectedSeries, setSelectedSeries] = useState<SeriesFolder | null>(null);
-  const [seriesMetaLoading, setSeriesMetaLoading] = useState(false);
+  const [detail, setDetail] = useState<{ kind: 'movie' | 'series'; title: string; folder?: SeriesFolder; channel?: Channel } | null>(null);
+  const [gridView, setGridView] = useState(false);
 
   const [mv, setMv] = useState<Channel[]>([]);
   const [showMv, setShowMv] = useState(false);
@@ -73,21 +71,24 @@ export default function Home() {
     statusTimer.current = setTimeout(() => setStatus(''), 3000);
   }, []);
 
-  /* ---------- load ---------- */
+  /* ---------- load / persist ---------- */
   useEffect(() => {
     const ps = load<Profile[]>('profiles', [DEFAULT_PROFILE]);
     setProfiles(ps.length ? ps : [DEFAULT_PROFILE]);
     setActiveProfileId(load('activeProfileId', 'default'));
     setOverrides(load('groupOverrides', {}));
     setTmdbKey(load('tmdbKey', ''));
+    const standalone = (window.navigator as any).standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+    setIsStandalone(standalone);
     loadPlaylist<Playlist>().then((pl) => {
-      if (pl) setPlaylist(pl);
-      else if (isIOS) setShowImport(true), setShowInstallHint(true);
-      else if (!pl) setShowInstallHint(isIOS && !(window.navigator as any).standalone);
-      if (!pl) setShowInstallHint(isIOS && !(window.navigator as any).standalone);
-      if (!pl) setShowImport(true);
+      if (pl) {
+        setPlaylist(pl);
+        if (pl.epgUrl) loadEpg(pl.epgUrl);
+      } else {
+        if (isIOS && !standalone) setShowInstallHint(true);
+        setShowImport(true);
+      }
     });
-    setIsStandalone((window.navigator as any).standalone === true || window.matchMedia('(display-mode: standalone)').matches);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, []);
 
@@ -129,7 +130,9 @@ export default function Home() {
 
   /* ---------- import ---------- */
   const applyOverrides = useCallback((chs: Channel[]) =>
-    chs.map((c) => (overrides[c.id] ? { ...c, group: overrides[c.id] } : c)), [overrides]);
+    chs.map((c) => (overrides[c.id]
+      ? { ...c, group: overrides[c.id], groups: [overrides[c.id]] }
+      : c)), [overrides]);
 
   function importPlaylistText(text: string, name: string, epgUrl?: string) {
     const { channels, epgUrl: parsedEpg } = parseM3U(text);
@@ -148,7 +151,7 @@ export default function Home() {
     try {
       const text = await fetchText(importUrl.trim());
       importPlaylistText(text, importUrl.trim());
-    } catch (e: any) { setImportError(e?.message || 'Import failed'); }
+    } catch (e: any) { setImportError(e?.message || 'Import failed — check the URL'); }
     finally { setImporting(false); }
   }
 
@@ -170,11 +173,11 @@ export default function Home() {
       const text = await fetchText(url);
       const epgUrl = `${xtream.host.trim().replace(/\/+$/, '')}/xmltv.php?username=${encodeURIComponent(xtream.user)}&password=${encodeURIComponent(xtream.pass)}`;
       importPlaylistText(text, xtream.host.trim(), epgUrl);
-    } catch (e: any) { setImportError(e?.message || 'Import failed'); }
+    } catch (e: any) { setImportError(e?.message || 'Import failed — check the login'); }
     finally { setImporting(false); }
   }
 
-  /* ---------- data ---------- */
+  /* ---------- backup ---------- */
   async function exportData() {
     const data = { v: 1, profiles, activeProfileId, groupOverrides: overrides, tmdbKey, playlist };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
@@ -210,52 +213,40 @@ export default function Home() {
   }
 
   /* ---------- profile ---------- */
-  function togglePin(profile: Profile) {
+  function pickProfile(profile: Profile) {
     if (!profile.pin) { setActiveProfileId(profile.id); setShowProfiles(false); return; }
     setShowPin({ profile, resolve: (ok) => { if (ok) { setActiveProfileId(profile.id); setShowProfiles(false); } setShowPin(null); } });
   }
 
   /* ---------- playback ---------- */
-  const selectChannel = useCallback((ch: Channel, resume: number = 0) => {
-    setSelected({ channel: ch, resume: ch.contentType === 'LIVE' || ch.contentType === undefined ? 0 : resume });
+  const resumeMap = useMemo(() => {
+    const m: Record<string, { time: number; duration?: number }> = {};
+    for (const cw of activeProfile.continueWatching) m[cw.channelId] = { time: cw.time, duration: cw.duration };
+    return m;
+  }, [activeProfile.continueWatching]);
+
+  const selectChannel = useCallback((ch: Channel, resume?: number) => {
+    const r = resume ?? resumeMap[ch.id]?.time ?? 0;
+    setSelected({ channel: ch, resume: !ch.contentType || ch.contentType === 'LIVE' ? 0 : r });
     updateProfile({
       recents: [ch.id, ...activeProfile.recents.filter((x) => x !== ch.id)].slice(0, 30),
       watchHistory: [ch.id, ...activeProfile.watchHistory.filter((x) => x !== ch.id)].slice(0, 200),
     });
-    if (ch.contentType === 'MOVIE' && tmdbKey) fetchTmdb(`movie:${ch.name}`, 'movie', ch.name);
-    if (ch.contentType === 'SERIES' && tmdbKey) fetchTmdb(`tv:${ch.name}`, 'tv', ch.name);
-  }, [activeProfile, updateProfile, tmdbKey]);
+    const type = ch.contentType === 'MOVIE' ? 'movie' : ch.contentType === 'SERIES' ? 'tv' : null;
+    if (type && !meta[`${type}:${ch.name}`]) {
+      getTmdb(type as 'movie' | 'tv', ch.name, tmdbKey).then((m) => { if (m) setMeta((prev) => ({ ...prev, [`${type}:${ch.name}`]: m })); });
+    }
+  }, [activeProfile, updateProfile, resumeMap, tmdbKey, meta]);
 
   function onProgress(channelId: string, time: number, duration: number) {
     const ch = playlist?.channels.find((c) => c.id === channelId);
-    if (!ch || ch.contentType === 'LIVE' || ch.contentType === undefined) return;
+    if (!ch || !ch.contentType || ch.contentType === 'LIVE') return;
     const others = activeProfile.continueWatching.filter((c) => c.channelId !== channelId);
     const nearEnd = duration > 0 && time > duration - 30;
     const next = nearEnd
       ? others
       : [{ channelId, time, duration: Number.isFinite(duration) ? duration : 0, updatedAt: Date.now() }, ...others].slice(0, 50);
-    updateProfile({ continueWatching: next as any });
-  }
-
-  async function fetchTmdb(key: string, type: 'movie' | 'tv', title: string) {
-    if (!tmdbKey || meta[key]) return;
-    try {
-      const search = await fetch(`https://api.themoviedb.org/3/search/${type}?api_key=${encodeURIComponent(tmdbKey)}&query=${encodeURIComponent(title)}`);
-      const sj = await search.json();
-      const first = sj.results?.[0];
-      if (!first) return;
-      const res = await fetch(`https://api.themoviedb.org/3/${type}/${first.id}?api_key=${encodeURIComponent(tmdbKey)}`);
-      const dj = await res.json();
-      setMeta((prev) => ({ ...prev, [key]: dj }));
-    } catch { /* offline or wrong key */ }
-  }
-
-  function openSeries(folder: SeriesFolder) {
-    setSelectedSeries(folder);
-    if (tmdbKey && !meta[`tv:${folder.name}`]) {
-      setSeriesMetaLoading(true);
-      fetchTmdb(`tv:${folder.name}`, 'tv', folder.name).finally(() => setSeriesMetaLoading(false));
-    }
+    updateProfile({ continueWatching: next });
   }
 
   function toggleFavorite(id: string) {
@@ -271,36 +262,69 @@ export default function Home() {
     setShowMv(true);
   }
 
+  /* ---------- detail / metadata ---------- */
+  function openDetail(kind: 'movie' | 'series', title: string, target: { folder?: SeriesFolder; channel?: Channel }) {
+    setDetail({ kind, title, ...target });
+    const key = `${kind === 'series' ? 'tv' : 'movie'}:${title}`;
+    if (!meta[key]) {
+      getTmdb(kind === 'series' ? 'tv' : 'movie', title, tmdbKey).then((m) => { if (m) setMeta((prev) => ({ ...prev, [key]: m })); });
+    }
+  }
+
+  function detailPlaySection() {
+    if (!detail) return;
+    if (detail.kind === 'movie' && detail.channel) {
+      const ch = detail.channel;
+      setDetail(null);
+      selectChannel(ch);
+    } else if (detail.kind === 'series' && detail.folder) {
+      const first = detail.folder.episodes.find((e) => e.seasonNumber === (detail.folder!.episodes[0]?.seasonNumber ?? 1));
+      if (first) { setDetail(null); selectChannel(first.channel); }
+    }
+  }
+
+  function detailPlayEpisode(ep: SeriesEpisode) {
+    setDetail(null);
+    selectChannel(ep.channel);
+  }
+
   /* ---------- derived ---------- */
   const channels = playlist?.channels || [];
   const favorites = activeProfile.favorites;
   const hiddenGroups = activeProfile.hiddenGroups;
   const renamed = activeProfile.renamed;
 
-  const allGroups = useMemo(() => Array.from(new Set(channels.map((c) => c.group || 'Uncategorized'))), [channels]);
+  const allGroups = useMemo(() => Array.from(new Set(channels.flatMap((c) => c.groups || [c.group || 'Uncategorized']))), [channels]);
+
+  const groupCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const c of channels) for (const g of (c.groups || [c.group || 'Uncategorized'])) counts[g] = (counts[g] || 0) + 1;
+    return counts;
+  }, [channels]);
 
   const groups = useMemo(() => {
     const visible = allGroups.filter((g) => !hiddenGroups.includes(g));
     const order = activeProfile.groupOrder;
-    return visible.sort((a, b) => {
+    return [...visible].sort((a, b) => {
       const ia = order.indexOf(a), ib = order.indexOf(b);
       const ra = ia === -1 ? Infinity : ia, rb = ib === -1 ? Infinity : ib;
-      return ra !== rb ? ra - rb : a.localeCompare(b);
+      return ra !== rb ? ra - rb : (groupCounts[b] || 0) - (groupCounts[a] || 0);
     });
-  }, [allGroups, hiddenGroups, activeProfile.groupOrder]);
+  }, [allGroups, hiddenGroups, activeProfile.groupOrder, groupCounts]);
 
-  const liveChannels = useMemo(() => channels.filter((c) => (c.contentType || 'LIVE') === 'LIVE'), [channels]);
+  const liveChannels = useMemo(() => channels.filter((c) => !c.contentType || c.contentType === 'LIVE'), [channels]);
   const movieChannels = useMemo(() => channels.filter((c) => c.contentType === 'MOVIE'), [channels]);
   const seriesChannels = useMemo(() => channels.filter((c) => c.contentType === 'SERIES'), [channels]);
   const seriesFolders = useMemo(() => groupIntoFolders(seriesChannels), [seriesChannels]);
   const favoriteChannels = useMemo(() => channels.filter((c) => favorites.includes(c.id)), [channels, favorites]);
 
   const liveList = useMemo(() => {
+    const g = liveGroupPick;
     let list = liveChannels;
-    if (group !== 'all') list = list.filter((c) => (c.group || 'Uncategorized') === group);
+    if (g !== 'all') list = list.filter((c) => (c.groups || [c.group || 'Uncategorized']).includes(g));
     if (liveFilter) list = list.filter((c) => c.name.toLowerCase().includes(liveFilter.toLowerCase()));
     return list;
-  }, [liveChannels, group, liveFilter]);
+  }, [liveChannels, liveGroupPick, liveFilter]);
 
   const continueEntries = useMemo(() =>
     [...activeProfile.continueWatching]
@@ -314,8 +338,47 @@ export default function Home() {
   [activeProfile.continueWatching, channels]);
 
   const recentChannels = useMemo(() =>
-    activeProfile.recents.map((id) => channels.find((c) => c.id === id)).filter(Boolean).slice(0, 12) as Channel[],
+    activeProfile.recents.map((id) => channels.find((c) => c.id === id)).filter(Boolean).slice(0, 14) as Channel[],
   [activeProfile.recents, channels]);
+
+  /* ---------- hero slides ---------- */
+  const heroSlides = useMemo<HeroSlide[]>(() => {
+    const out: HeroSlide[] = [];
+    const seen = new Set<string>();
+    for (const e of continueEntries.slice(0, 2)) {
+      const c = e.ch;
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      out.push({ kind: c.contentType === 'SERIES' ? 'series' : c.contentType === 'MOVIE' ? 'movie' : 'live', ch: c, folder: c.contentType === 'SERIES' ? seriesFolders.find((f) => f.episodes.some((x) => x.channel.id === c.id)) : undefined });
+    }
+    for (const c of continueEntries.map((e) => e.ch)) seen.add(c.id);
+    for (const f of seriesFolders.slice(0, 2)) if (!seen.has(f.name)) { seen.add(f.name); out.push({ kind: 'series', folder: f }); }
+    for (const c of movieChannels.filter((m) => m.logo).slice(0, 2)) if (!seen.has(c.id)) { seen.add(c.id); out.push({ kind: 'movie', ch: c }); }
+    const qRank = (t: string | null | undefined) => ({ SD: 1, HD: 2, FHD: 3, UHD: 4, '4K': 5 } as Record<string, number>)[t || ''] || 0;
+    const topLive = liveChannels.filter((c) => c.logo).sort((a, b) => qRank(b.qualityTag) - qRank(a.qualityTag));
+    for (const c of topLive) if (out.length < 5) { seen.add(c.id); out.push({ kind: 'live', ch: c }); }
+    return out.slice(0, 5);
+  }, [continueEntries, seriesFolders, movieChannels, liveChannels]);
+
+  /* fetch meta for flix-style hero slides */
+  const heroKey = heroSlides.map((s) => s.kind === 'live' ? s.ch?.id : (s.folder?.name || s.ch?.name)).join('|');
+  useEffect(() => {
+    let gone = false;
+    (async () => {
+      for (const s of heroSlides.slice(0, 3)) {
+        if (s.kind === 'live') continue;
+        const title = s.kind === 'series' ? s.folder?.name : s.ch?.name;
+        if (!title) continue;
+        const key = `${s.kind === 'series' ? 'tv' : 'movie'}:${title}`;
+        if (meta[key]) continue;
+        const m = await getTmdb(s.kind === 'series' ? 'tv' : 'movie', title, tmdbKey);
+        if (gone) return;
+        if (m) setMeta((prev) => ({ ...prev, [key]: m }));
+      }
+    })();
+    return () => { gone = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heroKey]);
 
   /* opened player context */
   const nowNext = useMemo(() => {
@@ -334,12 +397,16 @@ export default function Home() {
     return folder?.episodes;
   }, [selected, seriesFolders]);
 
-  /* guide tab "now" for visible channels */
+  /* guide tab rows */
   const guideRows = useMemo(() => {
-    return liveList.slice(0, visibleCount).map((ch) => {
+    return liveList.slice(0, visible.guide).map((ch) => {
       const progs = epgFor(ch);
-      const now = progs ? nowProgram(progs) : undefined;
-      const next = progs?.find((p) => now ? parseXmltvDate(p.start) >= parseXmltvDate(now.stop) : parseXmltvDate(p.start) > new Date());
+      const now = progs?.find((p2) => {
+        const s = parseXmltvDate(p2.start).getTime(), e = parseXmltvDate(p2.stop).getTime();
+        return s <= Date.now() && Date.now() < e;
+      });
+      const next = progs?.find((p2) =>
+        (!now || parseXmltvDate(p2.start) >= parseXmltvDate(now.stop)) && parseXmltvDate(p2.stop) > new Date());
       let pct = 0;
       if (now) {
         const s = parseXmltvDate(now.start).getTime(), e = parseXmltvDate(now.stop).getTime();
@@ -347,101 +414,164 @@ export default function Home() {
       }
       return { ch, now, next, pct };
     });
-  }, [liveList, visibleCount, epgFor]);
+  }, [liveList, visible.guide, epgFor]);
 
   const tabTitle: Record<Tab, string> = { home: 'Home', live: 'Live TV', series: 'Series', movies: 'Films', guide: 'Guide' };
-
-  /* ---------- render ---------- */
-
-  const TabBar = (
-    <nav className="fixed bottom-0 inset-x-0 z-30 ios-blur hairline-t pb-[var(--safe-b,0px)] md:pb-0">
-      <div className="flex justify-around h-[54px] max-w-xl mx-auto">
-        {([['home', IconHome], ['live', IconLive], ['series', IconSeries], ['movies', IconMovie], ['guide', IconGuide]] as [Tab, any][]).map(([t, Icon]) => (
-          <button key={t} onClick={() => { setTab(t); setVisibleCount(120); }} className="press flex flex-col items-center justify-center w-16">
-            <Icon className={`w-6 h-6 ${tab === t ? 'text-[#ff7a2a]' : 'text-white/50'}`} />
-            <span className={`text-[10px] mt-0.5 ${tab === t ? 'text-[#ff7a2a] font-semibold' : 'text-white/50'}`}>{tabTitle[t]}</span>
-          </button>
-        ))}
-      </div>
-    </nav>
-  );
 
   return (
     <div className="min-h-dvh bg-[#0b0b0d]">
       {/* Top mini bar */}
       <header className="fixed top-0 inset-x-0 z-30 ios-blur">
-        <div className="max-w-xl mx-auto px-3 pt-[calc(6px+var(--safe-t,0px))] pb-2 flex items-center gap-1 hairline-b">
+        <div className="max-w-2xl mx-auto px-3 pt-[calc(6px+var(--safe-t,0px))] pb-2 flex items-center gap-1 hairline-b">
           <button onClick={() => setShowProfiles(true)} className="press w-9 h-9 rounded-full bg-gradient-to-br from-[#ff7a2a] to-[#ff2d55] flex items-center justify-center text-[15px] font-bold text-black">
             {activeProfile?.name.slice(0, 1).toUpperCase()}
           </button>
-          <div className="flex-1 text-center text-[16px] font-semibold">{tabTitle[tab]}</div>
-          <button onClick={() => setShowSearch(true)} className="press p-2 text-white/80"><IconSearch className="w-6 h-6" /></button>
-          <button onClick={() => setShowSettings(true)} className="press p-2 text-white/80"><IconSettings className="w-6 h-6" /></button>
+          <div className="flex-1 text-center text-[16px] font-semibold truncate">{tabTitle[tab]}</div>
+          <button onClick={() => setShowSearch(true)} className="press p-2 text-white/80" aria-label="Search"><IconSearch className="w-6 h-6" /></button>
+          <button onClick={() => setShowSettings(true)} className="press p-2 text-white/80" aria-label="Settings"><IconSettings className="w-6 h-6" /></button>
         </div>
       </header>
 
-      {/* Main */}
-      <main className="max-w-xl mx-auto pt-[calc(52px+var(--safe-t,0px))] pb-[calc(70px+var(--safe-b,0px))]">
-        {showInstallHint && (
-          <button onClick={() => setShowInstallHint(false)} className="press mx-4 mt-3 flex items-center gap-2 bg-[#ff7a2a]/15 border border-[#ff7a2a]/40 rounded-xl px-3 py-2.5 text-left">
-            <div className="flex-1 text-[13px] text-[#ffd9c4] leading-snug">
-              <b>Install the app:</b> Safari → Share → <b>Add to Home Screen</b> for the full-screen experience.
-            </div>
-            <IconClose className="w-4 h-4 text-[#ffd9c4]/70" />
-          </button>
-        )}
-
+      <main className="max-w-2xl mx-auto pt-[calc(50px+var(--safe-t,0px))] pb-[calc(72px+var(--safe-b,0px))]">
         {!playlist && (
-          <div className="px-8 pt-24 text-center space-y-4">
-            <div className="text-6xl">📺</div>
-            <div className="text-[20px] font-bold">Welcome to M3U Player</div>
-            <div className="text-[14px] text-white/50 leading-relaxed">Import your own playlist — M3U, M3U8 or an Xtream login. Posters, a real guide and Continue Watching arrive on their own.</div>
-            <button onClick={() => setShowImport(true)} className="press inline-flex items-center gap-2 bg-[#ff7a2a] text-black font-semibold px-5 py-3 rounded-2xl text-[16px]">
-              <IconPlus className="w-5 h-5" /> Add playlist
-            </button>
-          </div>
+          importing ? (
+            <Skeletons />
+          ) : (
+            <div className="px-8 pt-16 text-center space-y-4">
+              <Aurora />
+              <div className="relative text-6xl">🍿</div>
+              <div className="relative text-[22px] font-extrabold tracking-tight">Your own Netflix</div>
+              <div className="relative text-[14px] text-white/50 leading-relaxed">Import a playlist — M3U, M3U8 or an Xtream login. Posters, a real programme guide, Continue Watching and multiview arrive on their own.</div>
+              <button onClick={() => setShowImport(true)} className="press relative inline-flex items-center gap-2 bg-[#ff7a2a] text-black font-bold px-6 py-3.5 rounded-2xl text-[16px] shadow-lg shadow-orange-900/30">
+                <IconPlus className="w-5 h-5" /> Add playlist
+              </button>
+            </div>
+          )
         )}
 
         {playlist && (
-          <>
-            {/* large title */}
-            <div className="px-4 pt-3 pb-1 flex items-end justify-between">
-              <h1 className="text-[28px] font-extrabold tracking-tight">{tabTitle[tab]}</h1>
-              <button onClick={() => setShowImport(true)} className="press text-[13px] text-white/50 flex items-center gap-1">
-                <IconPlus className="w-4 h-4" /> Playlist
-              </button>
-            </div>
-
+          <div className="relative">
             {tab === 'home' && (
-              <HomeTab
-                playlist={playlist} continueEntries={continueEntries} favorites={favoriteChannels} recent={recentChannels}
-                onPlay={selectChannel} onOpenSeries={openSeries} groups={groups} setGroup={setGroup} tab={tab} setTab={setTab}
-              />
+              <>
+                <Hero slides={heroSlides} isFavSet={new Set(favorites)}
+                  onFav={toggleFavorite}
+                  onPlay={(s) => {
+                    if (s.kind === 'live' && s.ch) selectChannel(s.ch);
+                    else if (s.kind === 'series' && s.folder) openDetail('series', s.folder.name, { folder: s.folder });
+                    else if (s.kind === 'movie' && s.ch) selectChannel(s.ch, resumeMap[s.ch.id]?.time);
+                  }}
+                  onInfo={(s) => {
+                    if (s.kind === 'series' && s.folder) openDetail('series', s.folder.name, { folder: s.folder });
+                    if (s.kind === 'movie' && s.ch) openDetail('movie', s.ch.name, { channel: s.ch });
+                  }} />
+
+                <GenreStrip groups={groups.slice(0, 12)} counts={groupCounts} onPick={(g) => { setLiveGroupPick(g); setTab('live'); }} />
+
+                {continueEntries.length > 0 && (
+                  <Shelf title="Continue watching">
+                    {continueEntries.map(({ ch, pct, time }) => (
+                      <PosterCard key={ch.id} poster={ch.contentType === 'MOVIE' || ch.contentType === 'SERIES' ? ch.logo : undefined}
+                        title={ch.name} showProgress={pct}
+                        onClick={() => selectChannel(ch, time)} />
+                    ))}
+                  </Shelf>
+                )}
+
+                {favoriteChannels.length > 0 && (
+                  <Shelf title="Favourites">
+                    {favoriteChannels.slice(0, 20).map((ch) => (
+                      ch.contentType === 'MOVIE' || ch.contentType === 'SERIES'
+                        ? <PosterCard key={ch.id} poster={ch.logo} title={ch.name} onClick={() => selectChannel(ch)} />
+                        : <LiveTile key={ch.id} ch={ch} onClick={() => selectChannel(ch)} />
+                    ))}
+                  </Shelf>
+                )}
+
+                {recentChannels.length > 0 && (
+                  <Shelf title="Recently watched">
+                    {recentChannels.map((ch) => (
+                      ch.contentType === 'MOVIE' || ch.contentType === 'SERIES'
+                        ? <PosterCard key={ch.id} poster={ch.logo} title={ch.name} onClick={() => selectChannel(ch)} />
+                        : <LiveTile key={ch.id} ch={ch} onClick={() => selectChannel(ch)} />
+                    ))}
+                  </Shelf>
+                )}
+
+                {groups.slice(0, 5).map((g) => {
+                  const list = liveChannels.filter((c) => (c.groups || [c.group || 'Uncategorized']).includes(g)).slice(0, 14);
+                  if (!list.length) return null;
+                  return (
+                    <Shelf key={g} title={renamed[g] || g} onSeeAll={() => { setLiveGroupPick(g); setTab('live'); }}>
+                      {list.map((ch) => <LiveTile key={ch.id} ch={ch} onClick={() => selectChannel(ch)} />)}
+                    </Shelf>
+                  );
+                })}
+
+                {seriesFolders.length > 0 && (
+                  <Shelf title="Series" onSeeAll={() => setTab('series')}>
+                    {seriesFolders.slice(0, 14).map((f) => (
+                      <PosterCard key={f.name} poster={f.tmdbPosterUrl || f.posterUrl} title={f.name} subtitle={`${f.episodeCount} eps`}
+                        onClick={() => openDetail('series', f.name, { folder: f })} />
+                    ))}
+                  </Shelf>
+                )}
+
+                {movieChannels.length > 0 && (
+                  <Shelf title="Films" onSeeAll={() => setTab('movies')}>
+                    {movieChannels.filter((c) => c.logo).slice(0, 14).map((ch) => (
+                      <PosterCard key={ch.id} poster={ch.logo} title={ch.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')}
+                        subtitle={ch.qualityTag || undefined}
+                        onClick={() => openDetail('movie', ch.name, { channel: ch })} />
+                    ))}
+                  </Shelf>
+                )}
+
+                <div className="px-4 mt-8 mb-2 text-[11px] text-white/25">
+                  {playlist.channels.length.toLocaleString()} items · imported {new Date(playlist.importedAt).toLocaleDateString()}
+                </div>
+              </>
             )}
 
             {tab === 'live' && (
-              <LiveTab list={liveList} groups={groups} group={group} setGroup={setGroup} filter={liveFilter} setFilter={setLiveFilter}
-                visibleCount={visibleCount} loadMore={() => setVisibleCount((v) => v + 200)}
-                epgFor={epgFor} renamed={renamed} favorites={new Set(favorites)} toggleFav={toggleFavorite} onPlay={selectChannel} onAddMv={addToMv} />
+              <LiveTab list={liveList} groups={groups} group={liveGroupPick} setGroup={setLiveGroupPick}
+                filter={liveFilter} setFilter={setLiveFilter} visibleCount={visible.live}
+                loadMore={() => setVisible((v) => ({ ...v, live: v.live + 240 }))}
+                epgFor={epgFor} renamed={renamed} favorites={new Set(favorites)} toggleFav={toggleFavorite}
+                onPlay={selectChannel} grid={gridView} setGrid={setGridView} />
             )}
 
             {tab === 'series' && (
-              <SeriesTab folders={seriesFolders} visibleCount={visibleCount} loadMore={() => setVisibleCount((v) => v + 100)}
-                onOpen={openSeries} continueId={selected?.channel.id} />
+              <GridTab items={seriesFolders} kind="series" visibleCount={visible.series}
+                loadMore={() => setVisible((v) => ({ ...v, series: v.series + 120 }))}
+                onOpen={(f: SeriesFolder) => openDetail('series', f.name, { folder: f })} />
             )}
 
             {tab === 'movies' && (
-              <MoviesTab list={movieChannels} visibleCount={visibleCount} loadMore={() => setVisibleCount((v) => v + 60)} onPlay={selectChannel} />
+              <GridTab items={movieChannels} kind="movie" visibleCount={visible.movies}
+                loadMore={() => setVisible((v) => ({ ...v, movies: v.movies + 90 }))}
+                onOpen={(ch: Channel) => openDetail('movie', ch.name, { channel: ch })} />
             )}
 
             {tab === 'guide' && (
-              <GuideTab rows={guideRows} onPlay={selectChannel} />
+              <GuideTab rows={guideRows} onPlay={selectChannel}
+                loadMore={() => setVisible((v) => ({ ...v, guide: v.guide + 120 }))}
+                total={liveList.length} />
             )}
-          </>
+          </div>
         )}
       </main>
 
-      {TabBar}
+      {/* Tab bar */}
+      <nav className="fixed bottom-0 inset-x-0 z-30 ios-blur hairline-t">
+        <div className="flex justify-around max-w-2xl mx-auto" style={{ paddingBottom: 'var(--safe-b, 0px)' }}>
+          {([['home', 'Home', IconHome], ['live', 'Live TV', IconLive], ['series', 'Series', IconSeries], ['movies', 'Films', IconMovie], ['guide', 'Guide', IconGuide]] as [Tab, string, any][]).map(([t, title, Icon]) => (
+            <button key={t} onClick={() => setTab(t)} className="press flex flex-col items-center justify-center w-16 h-[56px]">
+              <Icon className={`w-[22px] h-[22px] ${tab === t ? 'text-[#ff7a2a]' : 'text-white/55'}`} />
+              <span className={`text-[10px] mt-0.5 ${tab === t ? 'text-[#ff7a2a] font-semibold' : 'text-white/55'}`}>{title}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
 
       {/* Player */}
       {selected && (
@@ -460,19 +590,25 @@ export default function Home() {
         />
       )}
 
-      {showMv && <Multiview items={mv} onExpand={(ch) => { setShowMv(false); selectChannel(ch); }} onRemove={(id) => setMv((p) => p.filter((x) => x.id !== id))} onClear={() => setMv([])} />}
+      {showMv && <Multiview items={mv}
+        onExpand={(ch) => { setShowMv(false); selectChannel(ch); }}
+        onRemove={(id) => setMv((p) => p.filter((x) => x.id !== id))}
+        onClear={() => { setShowMv(false); }} />}
 
       <ImportSheet open={showImport} onClose={() => setShowImport(false)}
         url={importUrl} setUrl={setImportUrl}
         xtream={xtream} setXtream={setXtream}
         importing={importing} error={importError}
-        onUrl={importFromUrl} onFile={importFromFile} onXtream={importXtream}
-        hasPlaylist={!!playlist} onChangePlaylist={() => setShowImport(true)} />
+        onUrl={importFromUrl} onFile={importFromFile} onXtream={importXtream} />
 
-      {selectedSeries && (
-        <SeriesSheet folder={selectedSeries} meta={meta[`tv:${selectedSeries.name}`]}
-          onClose={() => setSelectedSeries(null)} continueId={selected?.channel.id}
-          onPlay={(ep) => { setSelectedSeries(null); selectChannel(ep.channel); }} />
+      {detail && (
+        <DetailSheet kind={detail.kind} title={detail.title} folder={detail.folder} channel={detail.channel}
+          meta={meta[`${detail.kind === 'series' ? 'tv' : 'movie'}:${detail.title}`] || null}
+          isFav={detail.channel ? favorites.includes(detail.channel.id) : false}
+          onFav={() => detail.channel && toggleFavorite(detail.channel.id)}
+          onPlayMovie={detailPlaySection}
+          onPlayEpisode={detailPlayEpisode}
+          onClose={() => setDetail(null)} />
       )}
 
       <SettingsSheet open={showSettings} onClose={() => setShowSettings(false)}
@@ -492,7 +628,7 @@ export default function Home() {
         unhideAll={() => updateProfile({ hiddenGroups: [] })}
         moveToGroup={(channelId, g) => {
           setOverrides((prev) => ({ ...prev, [channelId]: g }));
-          setPlaylist((pl) => (pl ? { ...pl, channels: pl.channels.map((c) => (c.id === channelId ? { ...c, group: g } : c)) } : pl));
+          setPlaylist((pl) => (pl ? { ...pl, channels: pl.channels.map((c) => (c.id === channelId ? { ...c, group: g, groups: [g] } : c)) } : pl));
           savePlaylist(playlist!);
           flash('Moved');
         }}
@@ -504,249 +640,160 @@ export default function Home() {
         isStandalone={isStandalone} playbackCount={continueEntries.length} mvCount={mv.length} />
 
       <ProfilesSheet open={showProfiles} onClose={() => setShowProfiles(false)} profiles={profiles} activeId={activeProfileId}
-        onPick={togglePin}
-        onAdd={(name) => { if (!name) return; const p = newProfile(name); setProfiles((prev) => [...prev, p]); flash(`Profile “${name}” added`); }}
+        onPick={pickProfile}
+        onAdd={(name) => { if (!name) return; const p = { ...DEFAULT_PROFILE, id: `p_${Date.now()}`, name }; setProfiles((prev) => [...prev, p]); flash(`Profile “${name}” added`); }}
         onSetPin={(pid, pin) => setProfiles((prev) => prev.map((p) => (p.id === pid ? { ...p, pin: pin || undefined } : p)))}
         onDelete={(pid) => setProfiles((prev) => (prev.length > 1 ? prev.filter((p) => p.id !== pid) : prev))} />
 
-      {showPin && <PinOverlay profile={showPin.profile} onResolve={showPin.resolve} onCancel={() => { showPin.resolve(false); }} />}
+      {showPin && <PinOverlay profile={showPin.profile} onResolve={showPin.resolve} onCancel={() => showPin.resolve(false)} />}
 
       {showSearch && (
         <SearchOverlay channels={channels} series={seriesFolders} favorites={new Set(favorites)}
-          onClose={() => setShowSearch(false)}
-          onPlayChannel={(c) => { setShowSearch(false); selectChannel(c); }}
-          onOpenSeries={(f) => { setShowSearch(false); openSeries(f); }} />
+          onClose={() => setShowSearch(false)} onPlayChannel={(c) => { setShowSearch(false); selectChannel(c); }}
+          onOpenSeries={(f) => { setShowSearch(false); openDetail('series', f.name, { folder: f }); }}
+          onOpenMovie={(c) => { setShowSearch(false); openDetail('movie', c.name, { channel: c }); }} />
       )}
 
-      {/* toast */}
       {status && (
-        <div className="fixed bottom-[calc(70px+var(--safe-b,0px)+12px)] inset-x-0 z-30 flex justify-center pointer-events-none fade-in">
-          <div className="bg-white text-black text-[13px] font-semibold px-4 py-2 rounded-full shadow-lg">{status}</div>
+        <div className="fixed bottom-[calc(66px+var(--safe-b,0px)+12px)] inset-x-0 z-30 flex justify-center pointer-events-none fade-in">
+          <div className="bg-white text-black text-[13px] font-semibold px-4 py-2 rounded-full shadow-xl">{status}</div>
         </div>
       )}
     </div>
   );
 }
 
-/* ================= Tabs ================= */
+/* ================= Live tab ================= */
 
-function ShelfCard({ poster, title, subtitle, rec, onClick, progress }: {
-  poster?: string; title: string; subtitle?: string; rec?: boolean; onClick: () => void; progress?: number;
-}) {
-  return (
-    <button onClick={onClick} className="press text-left" style={{ width: rec ? 180 : 110 }} title={title}>
-      <div className="relative rounded-lg overflow-hidden" style={{ aspectRatio: rec ? '16/9' : '2/3' }}>
-        <Poster src={poster} className="absolute inset-0 w-full h-full" />
-        {progress != null && (
-          <div className="absolute bottom-0 inset-x-0 h-1 bg-white/25">
-            <div className="h-full bg-[#ff7a2a]" style={{ width: `${progress}%` }} />
-          </div>
-        )}
-      </div>
-      <div className={`mt-1.5 text-[13px] ${rec ? 'font-semibold' : 'font-medium'} truncate`}>{title}</div>
-      {subtitle && <div className="text-[11px] text-white/40 truncate">{subtitle}</div>}
-    </button>
-  );
-}
-
-function HomeTab({ playlist, continueEntries, favorites, recent, onPlay, onOpenSeries, groups, setGroup, tab, setTab }: any) {
-  const continueWithMeta = continueEntries.map((e: any) => ({
-    ...e,
-    poster: e.ch.contentType === 'MOVIE' || e.ch.contentType === 'SERIES' ? e.ch.logo : undefined,
-  }));
-
-  return (
-    <div>
-      {continueEntries.length > 0 && (
-        <section className="mt-2">
-          <div className="px-4 pb-2 text-[17px] font-bold">Continue Watching</div>
-          <div className="scroll-x shelf">
-            {continueWithMeta.map(({ ch, pct, time }: any) => (
-              <ShelfCard key={ch.id} poster={ch.logo} title={ch.name} rec progress={pct}
-                subtitle={pct > 0 ? `${Math.round(pct)}% watched` : undefined}
-                onClick={() => onPlay(ch, time)} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {favorites.length > 0 && (
-        <section className="mt-6">
-          <div className="px-4 pb-2 text-[17px] font-bold">Favourites</div>
-          <div className="scroll-x shelf">
-            {favorites.slice(0, 20).map((ch: Channel) => (
-              <ShelfCard key={ch.id} poster={ch.contentType === 'MOVIE' || ch.contentType === 'SERIES' ? ch.logo : undefined}
-                title={ch.name} onClick={() => onPlay(ch, resumeFor(ch))} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {recent.length > 0 && (
-        <section className="mt-6">
-          <div className="px-4 pb-2 text-[17px] font-bold">Recently watched</div>
-          <div className="scroll-x shelf">
-            {recent.map((ch: Channel) => (
-              <ShelfCard key={ch.id} poster={ch.contentType === 'MOVIE' || ch.contentType === 'SERIES' ? ch.logo : undefined}
-                title={ch.name} onClick={() => onPlay(ch, resumeFor(ch))} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section className="mt-6">
-        <div className="px-4 pb-2 flex items-center justify-between">
-          <div className="text-[17px] font-bold">Live now</div>
-          <button onClick={() => setTab('live')} className="press text-[14px] text-[#0a84ff]">See all</button>
-        </div>
-        <div className="ios-card mx-4 divide-y divide-white/5">
-          {playlist.channels.filter((c: Channel) => (c.contentType || 'LIVE') === 'LIVE').slice(0, 6).map((ch: Channel) => (
-            <button key={ch.id} onClick={() => onPlay(ch)} className="press w-full flex items-center gap-3 px-3 py-2.5 text-left">
-              <Poster src={ch.logo} className="w-9 h-9 rounded-md" />
-              <div className="flex-1 min-w-0">
-                <div className="text-[15px] truncate">{ch.name}</div>
-                <div className="text-[11px] text-white/35 truncate">{ch.group}</div>
-              </div>
-              <IconPlayCircle className="w-7 h-7 text-[#ff7a2a]" />
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {groups.length > 0 && (
-        <section className="mt-6">
-          <div className="px-4 pb-2 text-[17px] font-bold">Your groups</div>
-          <div className="scroll-x shelf">
-            {groups.slice(0, 20).map((g: string) => (
-              <Chip key={g} label={g} onClick={() => { setGroup(g); setTab('live'); }} />
-            ))}
-          </div>
-        </section>
-      )}
-    </div>
-  );
-}
-
-function resumeFor(ch: Channel) { return 0; }
-
-function LiveTab({ list, groups, group, setGroup, filter, setFilter, visibleCount, loadMore, epgFor, renamed, favorites, toggleFav, onPlay, onAddMv }: any) {
+function LiveTab({ list, groups, group, setGroup, filter, setFilter, visibleCount, loadMore, epgFor, renamed, favorites, toggleFav, onPlay, grid, setGrid }: any) {
+  const now = Date.now();
   return (
     <div>
       <div className="scroll-x flex gap-2 px-4 py-2.5">
         <Chip label="All" active={group === 'all'} onClick={() => setGroup('all')} />
         {groups.map((g: string) => <Chip key={g} label={renamed[g] || g} active={group === g} onClick={() => setGroup(g)} />)}
       </div>
-      <div className="px-4 pb-2">
+      <div className="px-4 pb-2 flex gap-2 items-center">
         <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter channels"
-          className="w-full bg-white/8 rounded-xl px-3.5 py-2.5 text-[16px] outline-none placeholder:text-white/30" />
+          className="flex-1 bg-white/8 rounded-xl px-3.5 py-2.5 text-[16px] outline-none placeholder:text-white/30" />
+        <button onClick={() => setGrid(!grid)} className="press bg-white/8 rounded-xl px-3 py-2.5 text-[13px] font-semibold text-white/80">{grid ? '▦ List' : '▥ Grid'}</button>
       </div>
-      <div className="ios-card mx-4 divide-y divide-white/5">
-        {list.slice(0, visibleCount).map((ch: Channel) => {
-          const now = epgFor(ch) ? epgFor(ch).find((p: Program) => nowProgram([p])) : undefined;
-          return (
-            <div key={ch.id} className="flex items-center gap-3 px-3 py-2 hairline-b last:border-0">
-              <button onClick={() => onPlay(ch)} className="press flex items-center gap-3 flex-1 min-w-0 text-left">
-                <Poster src={ch.logo} className="w-10 h-10 rounded-lg shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[15px] truncate flex items-center gap-1.5">
-                    <span className="truncate">{ch.name}</span>
-                    <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1 rounded shrink-0">LIVE</span>
-                    {ch.qualityTag && <span className="text-[10px] text-white/40 shrink-0">{ch.qualityTag}</span>}
+
+      {grid ? (
+        <div className="grid grid-cols-3 gap-3 px-4 py-1 md:grid-cols-4">
+          {list.slice(0, visibleCount).map((ch: Channel) => <LiveTile key={ch.id} ch={ch} onClick={() => onPlay(ch)} />)}
+        </div>
+      ) : (
+        <div className="ios-card mx-4 divide-y divide-white/5">
+          {list.slice(0, visibleCount).map((ch: Channel) => {
+            const progs = epgFor(ch);
+            const nowP = progs?.find((p2: Program) => {
+              const s = parseXmltvDate(p2.start).getTime(), e = parseXmltvDate(p2.stop).getTime();
+              return s <= now && now < e;
+            });
+            return (
+              <div key={ch.id} className="flex items-center gap-3 px-3 py-2.5 hairline-b last:border-0">
+                <button onClick={() => onPlay(ch)} className="press flex items-center gap-3 flex-1 min-w-0 text-left">
+                  <Poster src={ch.logo} className="w-10 h-10 rounded-lg shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[15px] truncate flex items-center gap-1.5">
+                      <span className="truncate font-medium">{ch.name}</span>
+                      {ch.qualityTag && <span className="text-[10px] text-white/40 shrink-0">{ch.qualityTag}</span>}
+                    </div>
+                    {nowP ? (
+                      <div className="text-[11px] text-white/45 truncate mt-0.5">Now: {nowP.title}</div>
+                    ) : (
+                      <div className="text-[11px] text-white/35 truncate mt-0.5">{(ch.groups || [ch.group]).join(' · ')}</div>
+                    )}
                   </div>
-                  {now ? (
-                    <div className="text-[11px] text-white/45 truncate">{now.title}</div>
-                  ) : (
-                    <div className="text-[11px] text-white/35 truncate">{renamed[ch.group || 'Uncategorized'] || ch.group}</div>
-                  )}
-                </div>
-              </button>
-              <button onClick={() => toggleFav(ch.id)} className={`press p-2 ${favorites.has(ch.id) ? 'text-[#ff7a2a]' : 'text-white/25'}`}>
-                <IconStar filled={favorites.has(ch.id)} className="w-5 h-5" />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      {list.length > visibleCount && (
-        <div className="py-3 text-center">
-          <button onClick={loadMore} className="press text-[14px] text-[#0a84ff]">Show more ({(list.length - visibleCount).toLocaleString()} left)</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SeriesTab({ folders, visibleCount, loadMore, onOpen }: any) {
-  return (
-    <div>
-      <div className="grid grid-cols-3 gap-3 px-4 py-2 md:grid-cols-4">
-        {folders.slice(0, visibleCount).map((f: SeriesFolder) => (
-          <button key={f.name} onClick={() => onOpen(f)} className="press text-left" title={f.name}>
-            <div className="relative rounded-xl overflow-hidden" style={{ aspectRatio: '2/3' }}>
-              <Poster src={f.tmdbPosterUrl || f.posterUrl} className="absolute inset-0 w-full h-full" />
-            </div>
-            <div className="mt-1 text-[12px] font-medium truncate">{f.name}</div>
-            <div className="text-[10px] text-white/35">{f.episodeCount} ep</div>
-          </button>
-        ))}
-      </div>
-      {folders.length > visibleCount && (
-        <div className="py-3 text-center">
-          <button onClick={loadMore} className="press text-[14px] text-[#0a84ff]">Show more ({(folders.length - visibleCount).toLocaleString()} left)</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MoviesTab({ list, visibleCount, loadMore, onPlay }: any) {
-  return (
-    <div>
-      <div className="grid grid-cols-3 gap-3 px-4 py-2 md:grid-cols-4">
-        {list.slice(0, visibleCount).map((ch: Channel) => (
-          <button key={ch.id} onClick={() => onPlay(ch)} className="press text-left" title={ch.name}>
-            <div className="relative rounded-xl overflow-hidden" style={{ aspectRatio: '2/3' }}>
-              <Poster src={ch.logo} className="absolute inset-0 w-full h-full" />
-              {ch.qualityTag && <div className="absolute bottom-1 left-1 text-[9px] font-bold bg-black/60 px-1 rounded">{ch.qualityTag}</div>}
-            </div>
-            <div className="mt-1 text-[12px] font-medium truncate">{ch.name}</div>
-          </button>
-        ))}
-      </div>
-      {list.length > visibleCount && (
-        <div className="py-3 text-center">
-          <button onClick={loadMore} className="press text-[14px] text-[#0a84ff]">Show more ({(list.length - visibleCount).toLocaleString()} left)</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function GuideTab({ rows, onPlay }: any) {
-  return (
-    <div className="ios-card mx-4 mt-2 divide-y divide-white/5">
-      {rows.map(({ ch, now, next, pct }: any) => (
-        <button key={ch.id} onClick={() => onPlay(ch)} className="press w-full flex items-center gap-3 px-3 py-2.5 text-left">
-          <Poster src={ch.logo} className="w-10 h-10 rounded-lg shrink-0" />
-          <div className="flex-1 min-w-0">
-            <div className="text-[15px] truncate">{ch.name}</div>
-            {now ? (
-              <div className="mt-0.5">
-                <div className="text-[12px] truncate text-white/80">
-                  <span className="text-[#ff7a2a] font-bold mr-1.5">NOW</span>{now.title}
-                </div>
-                <div className="mt-1 h-1 bg-white/10 rounded-full overflow-hidden w-full">
-                  <div className="h-full bg-[#ff7a2a]" style={{ width: `${pct}%` }} />
-                </div>
-                {next && <div className="text-[11px] text-white/35 truncate mt-1">Next {fmtClock(next.start)} · {next.title}</div>}
+                </button>
+                <button onClick={() => toggleFav(ch.id)} className={`press p-2 ${favorites.has(ch.id) ? 'text-[#ff7a2a]' : 'text-white/25'}`}>
+                  <IconStar filled={favorites.has(ch.id)} className="w-5 h-5" />
+                </button>
               </div>
-            ) : (
-              <div className="text-[11px] text-white/35 mt-0.5">No programme data</div>
-            )}
-          </div>
-        </button>
-      ))}
-      {rows.length === 0 && <div className="p-6 text-center text-white/40 text-[14px]">Load a playlist with a guide.</div>}
+            );
+          })}
+        </div>
+      )}
+
+      {list.length > visibleCount && (
+        <div className="py-3 text-center">
+          <button onClick={loadMore} className="press text-[14px] text-[#0a84ff]">Show more ({(list.length - visibleCount).toLocaleString()} left)</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= Films/Series grid tab ================= */
+
+function GridTab({ items, kind, visibleCount, loadMore, onOpen, favSet }: any) {
+  return (
+    <div>
+      <div className="grid grid-cols-3 gap-3 px-4 py-2 md:grid-cols-4">
+        {items.slice(0, visibleCount).map((it: any) => (
+          kind === 'series' ? (
+            <button key={it.name} onClick={() => onOpen(it)} className="press text-left" title={it.name}>
+              <div className="rounded-xl overflow-hidden" style={{ aspectRatio: '2/3' }}>
+                <Poster src={it.tmdbPosterUrl || it.posterUrl} label={it.name} className="w-full h-full" />
+              </div>
+              <div className="mt-1.5 text-[12px] font-semibold truncate">{it.name}</div>
+              <div className="text-[10px] text-white/35">{it.episodeCount} eps</div>
+            </button>
+          ) : (
+            <button key={it.id} onClick={() => onOpen(it)} className="press text-left" title={it.name}>
+              <div className="rounded-xl overflow-hidden" style={{ aspectRatio: '2/3' }}>
+                <Poster src={it.logo} label={it.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')} className="w-full h-full" />
+                {it.qualityTag && <div className="absolute bottom-1 left-1 text-[9px] font-bold bg-black/60 px-1 rounded">vod</div>}
+              </div>
+              <div className="mt-1.5 text-[12px] font-semibold truncate">{it.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')}</div>
+            </button>
+          )
+        ))}
+      </div>
+      {items.length > visibleCount && (
+        <div className="py-3 text-center">
+          <button onClick={loadMore} className="press text-[14px] text-[#0a84ff]">Show more ({(items.length - visibleCount).toLocaleString()} left)</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================= Guide tab ================= */
+
+function GuideTab({ rows, onPlay, loadMore, total }: any) {
+  return (
+    <div>
+      <div className="ios-card mx-4 divide-y divide-white/5">
+        {rows.map(({ ch, now, next, pct }: any) => (
+          <button key={ch.id} onClick={() => onPlay(ch)} className="press w-full flex items-center gap-3 px-3 py-2.5 text-left">
+            <Poster src={ch.logo} className="w-10 h-10 rounded-lg shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[15px] font-medium truncate">{ch.name}</div>
+              {now ? (
+                <div className="mt-0.5">
+                  <div className="text-[12px] truncate text-white/80">
+                    <span className="text-[#ff7a2a] font-bold mr-1.5">NOW</span>{now.title}
+                  </div>
+                  <div className="mt-1 h-1 bg-white/10 rounded-full overflow-hidden w-full">
+                    <div className="h-full bg-[#ff7a2a]" style={{ width: `${pct}%` }} />
+                  </div>
+                  {next && <div className="text-[11px] text-white/35 truncate mt-1">Next {fmtClock(next.start)} · {next.title}</div>}
+                </div>
+              ) : (
+                <div className="text-[11px] text-white/35 mt-0.5">No programme data</div>
+              )}
+            </div>
+          </button>
+        ))}
+        {rows.length === 0 && <div className="p-6 text-center text-white/40 text-[14px]">No guide in this playlist.</div>}
+      </div>
+      {total > rows.length && (
+        <div className="py-3 text-center">
+          <button onClick={loadMore} className="press text-[14px] text-[#0a84ff]">Show more</button>
+        </div>
+      )}
     </div>
   );
 }

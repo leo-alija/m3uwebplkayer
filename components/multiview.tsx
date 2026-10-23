@@ -5,7 +5,7 @@ import Hls from 'hls.js';
 import { Channel } from '@/lib/types';
 import { IconClose } from './ui';
 
-const isIOS = typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+import { NATIVE_HLS } from '@/lib/env';
 
 function MVTile({ ch, onExpand, onRemove, solo, onSolo, twoCol }: { ch: Channel; onExpand: () => void; onRemove: () => void; solo: boolean; onSolo: () => void; twoCol: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -17,7 +17,7 @@ function MVTile({ ch, onExpand, onRemove, solo, onSolo, twoCol }: { ch: Channel;
     let hls: Hls | null = null;
     const url = ch.url;
     if (/m3u8/.test(url)) {
-      if (isIOS || !Hls.isSupported()) {
+      if (NATIVE_HLS || !Hls.isSupported()) {
         video.src = url;
       } else {
         hls = new Hls({ enableWorker: true });

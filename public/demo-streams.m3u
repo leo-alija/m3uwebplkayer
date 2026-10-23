@@ -1,0 +1,15 @@
+#EXTM3U
+#EXTINF:-1 tvg-logo="https://raw.githubusercontent.com/muxinc/demo-assets/refs/heads/main/x36xhzz.png" group-title="Test",Mux Test Channel (Multi-bitrate)
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+#EXTINF:-1 tvg-logo="https://raw.githubusercontent.com/muxinc/demo-assets/refs/heads/main/apple.png" group-title="Test",Apple BipBop Advanced
+https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
+#EXTINF:-1 group-title="Demos",Demo Show S01E01 Pilot
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8?x=/series/demo-show/1
+#EXTINF:-1 group-title="Demos",Demo Show S01E02 The Twist
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8?x=/series/demo-show/2
+#EXTINF:-1 group-title="Demos",Demo Show S02E01 Second Round
+https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8?x=/series/demo-show/3
+#EXTINF:-1 group-title="Demos",Demo Movie Big Buck Bunny (1080p)
+https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/720/Big_Buck_Bunny_720_10s_5MB.mp4
+#EXTINF:-1 group-title="Demos",Demo Movie Sintel (1080p)
+https://test-videos.co.uk/vids/sintel/mp4/h264/720/Sintel_720_10s_5MB.mp4
