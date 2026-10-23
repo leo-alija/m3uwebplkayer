@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+html, body { background: #0b0d12; color: #e7eaf0; }
+* { -webkit-tap-highlight-color: transparent; }
+.video-wrap video { width: 100%; height: 100%; background: black; }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
