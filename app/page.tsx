@@ -21,7 +21,7 @@ type Tab = 'home' | 'live' | 'series' | 'movies' | 'guide';
 
 const DEFAULT_PROFILE: Profile = {
   id: 'default', name: 'Default', favorites: [], recents: [], hiddenGroups: [], renamed: {},
-  channelOrder: [], groupOrder: [], continueWatching: [], watchHistory: [],
+  channelOrder: [], groupOrder: [], continueWatching: [], watchHistory: [], watchlist: [], playCounts: {},
 };
 
 const isIOS = typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
@@ -79,7 +79,7 @@ export default function Home() {
   /* ---------- load / persist ---------- */
   useEffect(() => {
     const ps = load<Profile[]>('profiles', [DEFAULT_PROFILE]);
-    setProfiles(ps.length ? ps : [DEFAULT_PROFILE]);
+    setProfiles(ps.length ? ps.map((p) => ({ ...DEFAULT_PROFILE, ...p })) : [DEFAULT_PROFILE]);
     setActiveProfileId(load('activeProfileId', 'default'));
     setOverrides(load('groupOverrides', {}));
     setTmdbKey(load('tmdbKey', ''));
@@ -236,6 +236,7 @@ export default function Home() {
     updateProfile({
       recents: [ch.id, ...activeProfile.recents.filter((x) => x !== ch.id)].slice(0, 30),
       watchHistory: [ch.id, ...activeProfile.watchHistory.filter((x) => x !== ch.id)].slice(0, 200),
+      playCounts: { ...(activeProfile.playCounts || {}), [ch.id]: ((activeProfile.playCounts || {})[ch.id] || 0) + 1 },
     });
     const type = ch.contentType === 'MOVIE' ? 'movie' : ch.contentType === 'SERIES' ? 'tv' : null;
     if (type && !meta[`${type}:${ch.name}`]) {
@@ -259,6 +260,13 @@ export default function Home() {
       ? activeProfile.favorites.filter((x) => x !== id)
       : [...activeProfile.favorites, id];
     updateProfile({ favorites: next });
+  }
+
+  function toggleWatchlist(id: string) {
+    const cur = activeProfile.watchlist || [];
+    const has = cur.includes(id);
+    updateProfile({ watchlist: has ? cur.filter((x) => x !== id) : [id, ...cur] });
+    flash(has ? 'Removed from watchlist' : 'Added to watchlist');
   }
 
   function addToMv(ch: Channel) {
@@ -291,6 +299,20 @@ export default function Home() {
   function detailPlayEpisode(ep: SeriesEpisode) {
     setDetail(null);
     selectChannel(ep.channel);
+  }
+
+  /* More Like This tap → best match in the user's own playlist */
+  function openSimilar(title: string) {
+    const norm = (s: string) => s.toLowerCase().replace(/\s*[(\[][^)\]]*[)\]]\)?/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const t = norm(title);
+    if (!t) return;
+    const folder = seriesFolders.find((f) => norm(f.name) === t)
+      || seriesFolders.find((f) => norm(f.name).includes(t) || t.includes(norm(f.name)));
+    if (folder) { setDetail(null); openDetail('series', folder.name, { folder }); return; }
+    const movie = movieChannels.find((c) => norm(c.name) === t)
+      || movieChannels.find((c) => norm(c.name).includes(t) || t.includes(norm(c.name)));
+    if (movie) { setDetail(null); openDetail('movie', movie.name, { channel: movie }); return; }
+    flash(`“${title}” is not in your playlist`);
   }
 
   /* ---------- downloads (offline) ---------- */
@@ -350,6 +372,18 @@ export default function Home() {
   const seriesChannels = useMemo(() => channels.filter((c) => c.contentType === 'SERIES'), [channels]);
   const seriesFolders = useMemo(() => groupIntoFolders(seriesChannels), [seriesChannels]);
   const favoriteChannels = useMemo(() => channels.filter((c) => favorites.includes(c.id)), [channels, favorites]);
+  const watchlistChannels = useMemo(
+    () => (activeProfile.watchlist || []).map((id) => channels.find((c) => c.id === id)).filter(Boolean) as Channel[],
+    [activeProfile.watchlist, channels]);
+
+  const topChannels = useMemo(() => {
+    const counts = activeProfile.playCounts || {};
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([id]) => channels.find((c) => c.id === id))
+      .filter(Boolean)
+      .slice(0, 10) as Channel[];
+  }, [activeProfile.playCounts, channels]);
 
   const liveList = useMemo(() => {
     const g = liveGroupPick;
@@ -432,12 +466,15 @@ export default function Home() {
 
   const tabTitle: Record<Tab, string> = { home: 'Home', live: 'Live TV', series: 'Series', movies: 'Films', guide: 'Guide' };
 
+  /* watchlist key for the open detail sheet (series → first episode's channel) */
+  const detailId = detail?.channel?.id || (detail?.folder ? detail.folder.episodes[0]?.channel.id : undefined);
+
   return (
-    <div className="min-h-dvh bg-[#0b0b0d]">
+    <div className="min-h-dvh bg-ground">
       {/* Top mini bar */}
       <header className="fixed top-0 inset-x-0 z-30 ios-blur">
         <div className="max-w-2xl mx-auto px-3 pt-[calc(6px+var(--safe-t,0px))] pb-2 flex items-center gap-1 hairline-b">
-          <button onClick={() => setShowProfiles(true)} className="press w-9 h-9 rounded-full bg-gradient-to-br from-[#ff7a2a] to-[#ff2d55] flex items-center justify-center text-[15px] font-bold text-black">
+          <button onClick={() => setShowProfiles(true)} className="press w-9 h-9 rounded-full bg-gradient-to-br from-accent to-berry flex items-center justify-center text-[15px] font-bold text-black">
             {activeProfile?.name.slice(0, 1).toUpperCase()}
           </button>
           <div className="flex-1 text-center text-[16px] font-semibold truncate">{tabTitle[tab]}</div>
@@ -456,7 +493,7 @@ export default function Home() {
               <div className="relative text-6xl">🍿</div>
               <div className="relative text-[22px] font-extrabold tracking-tight">Your own Netflix</div>
               <div className="relative text-[14px] text-white/50 leading-relaxed">Import a playlist — M3U, M3U8 or an Xtream login. Posters, a real programme guide, Continue Watching and multiview arrive on their own.</div>
-              <button onClick={() => setShowImport(true)} className="press relative inline-flex items-center gap-2 bg-[#ff7a2a] text-black font-bold px-6 py-3.5 rounded-2xl text-[16px] shadow-lg shadow-orange-900/30">
+              <button onClick={() => setShowImport(true)} className="press relative inline-flex items-center gap-2 bg-accent text-black font-bold px-6 py-3.5 rounded-2xl text-[16px] shadow-lg shadow-orange-900/30">
                 <IconPlus className="w-5 h-5" /> Add playlist
               </button>
             </div>
@@ -491,11 +528,43 @@ export default function Home() {
                   </Shelf>
                 )}
 
+                {topChannels.length >= 3 && (
+                  <Shelf title="Top 10">
+                    {topChannels.map((ch, i) => (
+                      <PosterCard key={ch.id} rank={i + 1}
+                        poster={ch.logo}
+                        title={ch.contentType === 'MOVIE' ? ch.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '') : ch.name}
+                        subtitle={ch.qualityTag || undefined}
+                        onClick={() => {
+                          if (!ch.contentType || ch.contentType === 'LIVE') return selectChannel(ch);
+                          if (ch.contentType === 'MOVIE') return openDetail('movie', ch.name, { channel: ch });
+                          const f = seriesFolders.find((f) => f.episodes.some((x) => x.channel.id === ch.id));
+                          if (f) openDetail('series', f.name, { folder: f });
+                        }} />
+                    ))}
+                  </Shelf>
+                )}
+
                 {favoriteChannels.length > 0 && (
                   <Shelf title="Favourites">
                     {favoriteChannels.slice(0, 20).map((ch) => (
                       ch.contentType === 'MOVIE' || ch.contentType === 'SERIES'
                         ? <PosterCard key={ch.id} poster={ch.logo} title={ch.name} onClick={() => selectChannel(ch)} />
+                        : <LiveTile key={ch.id} ch={ch} onClick={() => selectChannel(ch)} />
+                    ))}
+                  </Shelf>
+                )}
+
+                {watchlistChannels.length > 0 && (
+                  <Shelf title="Watchlist">
+                    {watchlistChannels.slice(0, 20).map((ch) => (
+                      ch.contentType === 'MOVIE' || ch.contentType === 'SERIES'
+                        ? <PosterCard key={ch.id} poster={ch.logo} title={ch.name}
+                            onClick={() => {
+                              if (ch.contentType === 'MOVIE') return openDetail('movie', ch.name, { channel: ch });
+                              const f = seriesFolders.find((f) => f.episodes.some((x) => x.channel.id === ch.id));
+                              if (f) openDetail('series', f.name, { folder: f });
+                            }} />
                         : <LiveTile key={ch.id} ch={ch} onClick={() => selectChannel(ch)} />
                     ))}
                   </Shelf>
@@ -586,8 +655,8 @@ export default function Home() {
         <div className="flex justify-around max-w-2xl mx-auto" style={{ paddingBottom: 'var(--safe-b, 0px)' }}>
           {([['home', 'Home', IconHome], ['live', 'Live TV', IconLive], ['series', 'Series', IconSeries], ['movies', 'Films', IconMovie], ['guide', 'Guide', IconGuide]] as [Tab, string, any][]).map(([t, title, Icon]) => (
             <button key={t} onClick={() => setTab(t)} className="press flex flex-col items-center justify-center w-16 h-[56px]">
-              <Icon className={`w-[22px] h-[22px] ${tab === t ? 'text-[#ff7a2a]' : 'text-white/55'}`} />
-              <span className={`text-[10px] mt-0.5 ${tab === t ? 'text-[#ff7a2a] font-semibold' : 'text-white/55'}`}>{title}</span>
+              <Icon className={`w-[22px] h-[22px] ${tab === t ? 'text-accent' : 'text-white/55'}`} />
+              <span className={`text-[10px] mt-0.5 ${tab === t ? 'text-accent font-semibold' : 'text-white/55'}`}>{title}</span>
             </button>
           ))}
         </div>
@@ -627,6 +696,9 @@ export default function Home() {
           meta={meta[`${detail.kind === 'series' ? 'tv' : 'movie'}:${detail.title}`] || null}
           isFav={detail.channel ? favorites.includes(detail.channel.id) : false}
           onFav={() => detail.channel && toggleFavorite(detail.channel.id)}
+          isWatchlist={detailId ? (activeProfile.watchlist || []).includes(detailId) : false}
+          onWatchlist={() => detailId && toggleWatchlist(detailId)}
+          onPickSimilar={openSimilar}
           onPlayMovie={detailPlaySection}
           onPlayEpisode={detailPlayEpisode}
           dl={downloads}
@@ -730,7 +802,7 @@ function LiveTab({ list, groups, group, setGroup, filter, setFilter, visibleCoun
                     )}
                   </div>
                 </button>
-                <button onClick={() => toggleFav(ch.id)} className={`press p-2 ${favorites.has(ch.id) ? 'text-[#ff7a2a]' : 'text-white/25'}`}>
+                <button onClick={() => toggleFav(ch.id)} className={`press p-2 ${favorites.has(ch.id) ? 'text-accent' : 'text-white/25'}`}>
                   <IconStar filled={favorites.has(ch.id)} className="w-5 h-5" />
                 </button>
               </div>
@@ -741,7 +813,7 @@ function LiveTab({ list, groups, group, setGroup, filter, setFilter, visibleCoun
 
       {list.length > visibleCount && (
         <div className="py-3 text-center">
-          <button onClick={loadMore} className="press text-[14px] text-[#0a84ff]">Show more ({(list.length - visibleCount).toLocaleString()} left)</button>
+          <button onClick={loadMore} className="press text-[14px] text-link">Show more ({(list.length - visibleCount).toLocaleString()} left)</button>
         </div>
       )}
     </div>
@@ -776,7 +848,7 @@ function GridTab({ items, kind, visibleCount, loadMore, onOpen, favSet }: any) {
       </div>
       {items.length > visibleCount && (
         <div className="py-3 text-center">
-          <button onClick={loadMore} className="press text-[14px] text-[#0a84ff]">Show more ({(items.length - visibleCount).toLocaleString()} left)</button>
+          <button onClick={loadMore} className="press text-[14px] text-link">Show more ({(items.length - visibleCount).toLocaleString()} left)</button>
         </div>
       )}
     </div>

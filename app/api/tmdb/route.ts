@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     if (!first) return NextResponse.json(null);
 
     const detailRes = await fetch(
-      `${TMDB_HOST}/${type}/${first.id}?api_key=${encodeURIComponent(userKey)}&append_to_response=credits,videos`,
+      `${TMDB_HOST}/${type}/${first.id}?api_key=${encodeURIComponent(userKey)}&append_to_response=credits,videos,similar`,
       { cache: 'no-store' }
     );
     if (!detailRes.ok) return NextResponse.json({ error: `tmdb ${detailRes.status}` }, { status: 502 });

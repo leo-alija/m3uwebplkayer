@@ -144,7 +144,7 @@ export function Sheet({ open, title, onClose, children, tall }: { open: boolean;
       <div className="absolute inset-0 bg-black/60 fade-in" onClick={onClose} />
       <div className="absolute inset-x-0 bottom-0 md:inset-y-0 md:right-auto md:left-1/2 md:-translate-x-1/2 md:bottom-6 md:top-6 md:w-[560px] sheet-in">
         <div ref={bodyRef}
-          className="bg-[#1c1c1e] rounded-t-2xl md:rounded-2xl border-t md:border border-white/10 flex flex-col transition-transform will-change-transform"
+          className="bg-card rounded-t-2xl md:rounded-2xl border-t md:border border-white/10 flex flex-col transition-transform will-change-transform"
           style={{ maxHeight: tall ? '100dvh' : '92dvh', paddingBottom: 'var(--safe-b, 0px)' }}>
           <div
             className="w-full pt-3 pb-1.5 flex justify-center touch-none cursor-grab active:cursor-grabbing"
@@ -192,7 +192,7 @@ export function Row({ children, className }: { children: ReactNode; className?: 
 export function Button({ onClick, children, className, primary, disabled }: { onClick?: () => void; children: ReactNode; className?: string; primary?: boolean; disabled?: boolean }) {
   return (
     <button onClick={onClick} disabled={disabled}
-      className={`press px-4 py-2 rounded-xl text-[15px] font-semibold disabled:opacity-40 ${primary ? 'bg-[#ff7a2a] text-black' : 'bg-white/10 text-white'} ${className || ''}`}>
+      className={`press px-4 py-2 rounded-xl text-[15px] font-semibold disabled:opacity-40 ${primary ? 'bg-accent text-black' : 'bg-white/10 text-white'} ${className || ''}`}>
       {children}
     </button>
   );
@@ -201,7 +201,7 @@ export function Button({ onClick, children, className, primary, disabled }: { on
 export function Chip({ label, active, onClick }: { label: string; active?: boolean; onClick?: () => void }) {
   return (
     <button onClick={onClick}
-      className={`press px-3.5 py-1.5 rounded-full text-[14px] whitespace-nowrap ${active ? 'bg-[#ff7a2a] text-black font-semibold' : 'bg-white/10 text-white/85'}`}>
+      className={`press px-3.5 py-1.5 rounded-full text-[14px] whitespace-nowrap ${active ? 'bg-accent text-black font-semibold' : 'bg-white/10 text-white/85'}`}>
       {label}
     </button>
   );
@@ -214,14 +214,14 @@ export function Poster({ src, label, className }: { src?: string; label?: string
   return (
     <div className={`relative overflow-hidden ${className || ''}`}>
       {!has && (
-        <div className="absolute inset-0 bg-gradient-to-br from-[#3a3a3c] to-[#1c1c1e] flex items-end p-2">
+        <div className="absolute inset-0 bg-gradient-to-br from-haze to-card flex items-end p-2">
           {label && <div className="text-white/60 text-[11px] font-semibold leading-tight line-clamp-3">{label}</div>}
         </div>
       )}
       {has && (
         <img src={src} alt="" loading="lazy" draggable={false}
           onError={() => setFailed(true)} onLoad={() => setLoaded(true)}
-          className={`bg-gradient-to-br from-[#3a3a3c] to-[#1c1c1e] object-cover w-full h-full transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`} />
+          className={`bg-gradient-to-br from-haze to-card object-cover w-full h-full transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`} />
       )}
     </div>
   );

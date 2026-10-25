@@ -66,8 +66,8 @@ export function Hero({ slides, onPlay, onInfo, isFavSet, onFav }: {
               <img src={s.ch.logo} alt="" className="h-[40%] max-w-[60%] object-contain drop-shadow-2xl" />
             </div>
           )}
-          <div className="absolute inset-0 bg-gradient-to-t from-[#0b0b0d] via-[#0b0b0d]/35 to-transparent" />
-          <div className="absolute inset-0 bg-gradient-to-r from-[#0b0b0d]/85 via-transparent to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-ground via-ground/35 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-r from-ground/85 via-transparent to-transparent" />
         </div>
 
         <div className="relative px-4 -mt-14 pb-2">
@@ -80,7 +80,7 @@ export function Hero({ slides, onPlay, onInfo, isFavSet, onFav }: {
           </div>
           <h2 className="text-[26px] font-extrabold leading-tight tracking-tight max-w-[85%]">{workTitle}</h2>
           <div className="flex items-center gap-2 mt-1 text-[12px] text-white/60">
-            {s.meta?.vote_average > 0 && <span className="text-[#ffd60a] font-bold">★ {s.meta.vote_average.toFixed(1)}</span>}
+            {s.meta?.vote_average > 0 && <span className="text-star font-bold">★ {s.meta.vote_average.toFixed(1)}</span>}
             {year && <span>{year}</span>}
             {s.meta?.genres?.slice(0, 3).map((g: any) => <span key={g.id}>· {g.name}</span>)}
             {!s.meta && s.ch?.groups?.slice(0, 3).join(' · ')}
@@ -89,7 +89,7 @@ export function Hero({ slides, onPlay, onInfo, isFavSet, onFav }: {
             <p className="text-[13px] text-white/65 mt-2 leading-relaxed line-clamp-3 max-w-[92%]">{s.meta.overview}</p>
           )}
           <div className="flex items-center gap-2.5 mt-4">
-            <button onClick={() => onPlay(s)} className="press flex items-center gap-2 bg-[#ff7a2a] text-black font-bold px-5 py-3 rounded-2xl text-[15px] shadow-lg shadow-orange-900/30">
+            <button onClick={() => onPlay(s)} className="press flex items-center gap-2 bg-accent text-black font-bold px-5 py-3 rounded-2xl text-[15px] shadow-lg shadow-orange-900/30">
               <IconPlayCircle className="w-5 h-5" /> Play
             </button>
             {s.kind !== 'live' && (
@@ -97,7 +97,7 @@ export function Hero({ slides, onPlay, onInfo, isFavSet, onFav }: {
                 <span className="text-[16px] leading-none">ⓘ</span> Details
               </button>
             )}
-            <button onClick={() => s.ch && onFav(s.ch.id)} className={`press p-3 rounded-2xl bg-white/10 ${isFav ? 'text-[#ff7a2a]' : 'text-white'}`} title="Favourite">
+            <button onClick={() => s.ch && onFav(s.ch.id)} className={`press p-3 rounded-2xl bg-white/10 ${isFav ? 'text-accent' : 'text-white'}`} title="Favourite">
               <IconStar filled={isFav} className="w-5 h-5" />
             </button>
           </div>
@@ -107,7 +107,7 @@ export function Hero({ slides, onPlay, onInfo, isFavSet, onFav }: {
         <div className="flex justify-center gap-1.5 mt-3">
           {slides.map((_, i) => (
             <button key={i} onClick={() => { setKey((k) => k + 1); setIdx(i); }}
-              className={`h-1.5 rounded-full transition-all ${i === idx % slides.length ? 'w-5 bg-[#ff7a2a]' : 'w-1.5 bg-white/30'}`} aria-label={`Slide ${i + 1}`} />
+              className={`h-1.5 rounded-full transition-all ${i === idx % slides.length ? 'w-5 bg-accent' : 'w-1.5 bg-white/30'}`} aria-label={`Slide ${i + 1}`} />
           ))}
         </div>
       )}
@@ -123,7 +123,7 @@ export function Shelf({ title, children, onSeeAll }: { title: string; children: 
       <div className="px-4 pb-2 flex items-center justify-between">
         <div className="text-[17px] font-bold tracking-tight">{title}</div>
         {onSeeAll && (
-          <button onClick={onSeeAll} className="press text-[13px] text-[#0a84ff] flex items-center gap-0.5">
+          <button onClick={onSeeAll} className="press text-[13px] text-link flex items-center gap-0.5">
             See all <IconChevron className="w-3.5 h-3.5" />
           </button>
         )}
@@ -137,7 +137,7 @@ export function Shelf({ title, children, onSeeAll }: { title: string; children: 
 export function LiveTile({ ch, onClick }: { ch: Channel; onClick: () => void }) {
   return (
     <button onClick={onClick} className="press text-left" style={{ width: 150 }}>
-      <div className="relative rounded-xl overflow-hidden bg-gradient-to-br from-[#2c2c2e] to-[#161618] flex items-center justify-center" style={{ aspectRatio: '16/10' }}>
+      <div className="relative rounded-xl overflow-hidden bg-gradient-to-br from-raise to-deck flex items-center justify-center" style={{ aspectRatio: '16/10' }}>
         {ch.logo ? (
           <img src={ch.logo} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.display = 'none')}
             className="max-w-[62%] max-h-[62%] object-contain drop-shadow-lg" />
@@ -152,19 +152,27 @@ export function LiveTile({ ch, onClick }: { ch: Channel; onClick: () => void }) 
   );
 }
 
-/* Poster card for films/series */
-export function PosterCard({ poster, title, subtitle, onClick, showProgress }: {
-  poster?: string; title: string; subtitle?: string; onClick: () => void; showProgress?: number;
+/* Poster card for films/series; `rank` renders the Netflix Top-10 numeral */
+export function PosterCard({ poster, title, subtitle, onClick, showProgress, rank }: {
+  poster?: string; title: string; subtitle?: string; onClick: () => void; showProgress?: number; rank?: number;
 }) {
   return (
-    <button onClick={onClick} className="press text-left" style={{ width: 112 }}>
-      <div className="relative rounded-xl overflow-hidden" style={{ aspectRatio: '2/3' }}>
-        <Poster src={poster} label={title} className="absolute inset-0 w-full h-full" />
-        {showProgress != null && (
-          <div className="absolute bottom-0 inset-x-0 h-1 bg-white/25">
-            <div className="h-full bg-[#ff7a2a]" style={{ width: `${showProgress}%` }} />
-          </div>
+    <button onClick={onClick} className="press text-left" style={{ width: rank != null ? 146 : 112 }}>
+      <div className={rank != null ? 'flex items-end' : ''}>
+        {rank != null && (
+          <span
+            className="font-extrabold leading-none text-transparent shrink-0 select-none"
+            style={{ fontSize: 64, marginRight: -18, marginBottom: 6, WebkitTextStroke: '2px rgb(var(--text-rgb) / 0.5)' }}
+            aria-hidden>{rank}</span>
         )}
+        <div className="relative rounded-xl overflow-hidden flex-1" style={{ aspectRatio: '2/3' }}>
+          <Poster src={poster} label={title} className="absolute inset-0 w-full h-full" />
+          {showProgress != null && (
+            <div className="absolute bottom-0 inset-x-0 h-1 bg-white/25">
+              <div className="h-full bg-accent" style={{ width: `${showProgress}%` }} />
+            </div>
+          )}
+        </div>
       </div>
       <div className="mt-1.5 text-[12px] font-semibold truncate">{title}</div>
       {subtitle && <div className="text-[10px] text-white/35 truncate">{subtitle}</div>}

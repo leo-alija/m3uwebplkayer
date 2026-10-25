@@ -41,7 +41,7 @@ export function ImportSheet({ open, onClose, url, setUrl, xtream, setXtream, imp
           <label className="block cursor-pointer">
             <input type="file" accept=".m3u,.m3u8,.txt,text/plain" className="hidden"
               onChange={(e) => { if (e.target.files?.[0]) onFile(e.target.files[0]); e.target.value = ''; }} />
-            <div className="px-4 py-4 text-[16px] text-[#0a84ff] flex items-center justify-between">
+            <div className="px-4 py-4 text-[16px] text-link flex items-center justify-between">
               <span>Choose .m3u file</span><IconChevron className="w-4 h-4 text-white/30" />
             </div>
           </label>
@@ -75,12 +75,12 @@ export function ProfilesSheet({ open, onClose, profiles, activeId, onPick, onAdd
           {profiles.map((p) => (
             <Row key={p.id}>
               <button onClick={() => onPick(p)} className="press flex-1 flex items-center gap-3 py-1 text-left text-[16px]">
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#ff7a2a] to-[#ff2d55] flex items-center justify-center text-[14px] font-bold text-black">
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-accent to-berry flex items-center justify-center text-[14px] font-bold text-black">
                   {p.name.slice(0, 1).toUpperCase()}
                 </div>
                 <span className="flex-1 truncate">{p.name}</span>
                 {p.pin && <span className="text-[11px] text-white/40 mr-1">🔒</span>}
-                {p.id === activeId && <span className="text-[#ff7a2a] text-[14px] font-bold">✓</span>}
+                {p.id === activeId && <span className="text-accent text-[14px] font-bold">✓</span>}
                 <IconChevron className="w-4 h-4 text-white/30" />
               </button>
             </Row>
@@ -130,7 +130,7 @@ export function PinOverlay({ profile, onResolve, onCancel }: { profile: Profile;
         </div>
         <div className="flex justify-center gap-2">
           {Array.from({ length: target.length }).map((_, i) => (
-            <div key={i} className={`w-3 h-3 rounded-full ${i < pin.length ? 'bg-[#ff7a2a]' : 'bg-white/25'}`} />
+            <div key={i} className={`w-3 h-3 rounded-full ${i < pin.length ? 'bg-accent' : 'bg-white/25'}`} />
           ))}
         </div>
         <div className="grid grid-cols-3 gap-2">
@@ -188,14 +188,14 @@ export function SearchOverlay({ channels, series, onClose, onPlayChannel, onOpen
   );
 
   return (
-    <div className="fixed inset-0 z-40 bg-[#0b0b0d] flex flex-col fade-in">
+    <div className="fixed inset-0 z-40 bg-ground flex flex-col fade-in">
       <div className="ios-blur px-3 pt-[calc(8px+var(--safe-t,0px))] pb-2 flex items-center gap-2 hairline-b">
         <div className="flex-1 flex items-center bg-white/10 rounded-xl px-3">
           <input id="search-field" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search everything"
             className="flex-1 bg-transparent py-2.5 text-[16px] outline-none placeholder:text-white/35" />
           {q && <button onClick={() => setQ('')} className="press p-1 text-white/50"><IconClose className="w-4 h-4" /></button>}
         </div>
-        <button onClick={onClose} className="press text-[15px] text-[#0a84ff] px-1">Cancel</button>
+        <button onClick={onClose} className="press text-[15px] text-link px-1">Cancel</button>
       </div>
       <div className="scroll-y flex-1 pt-4 pb-[calc(20px+var(--safe-b,0px))]">
         {!ql && <div className="pt-24 text-center text-white/35 text-[14px]">Search live channels, films and series</div>}

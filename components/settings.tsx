@@ -38,7 +38,7 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
             {playlist && <span className="text-[13px] text-white/40">{playlist.channels.length.toLocaleString()} items</span>}
           </Row>
           <Row className="py-2">
-            <button onClick={onOpenImport} className="press flex-1 flex items-center justify-between text-[16px] text-[#0a84ff]">
+            <button onClick={onOpenImport} className="press flex-1 flex items-center justify-between text-[16px] text-link">
               <span>Add / replace playlist</span><IconChevron className="w-4 h-4" />
             </button>
           </Row>
@@ -53,7 +53,7 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
           <Row className="py-2"><span className="flex-1 text-[16px]">Watching now</span><span className="text-[13px] text-white/40">{playbackCount} in progress</span></Row>
           <Row className="py-2"><span className="flex-1 text-[16px]">Multiview tiles</span><span className="text-[13px] text-white/40">{mvCount}</span></Row>
           <Row className="py-2">
-            <button onClick={onOpenProfiles} className="press flex-1 flex items-center justify-between text-[16px] text-[#0a84ff]">
+            <button onClick={onOpenProfiles} className="press flex-1 flex items-center justify-between text-[16px] text-link">
               <span>Profiles</span><IconChevron className="w-4 h-4" />
             </button>
           </Row>
@@ -85,7 +85,7 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
         <GroupRow title="Groups">
           {list.map((g) => <GroupItem key={g} g={g} onRename={renameGroup} onHide={hideGroup} onReorder={reorderGroup} />)}
           <div className="px-4 py-2.5 flex gap-2">
-            <button onClick={unhideAll} disabled={!hiddenCount} className="press text-[15px] text-[#0a84ff] disabled:opacity-40">Unhide all ({hiddenCount})</button>
+            <button onClick={unhideAll} disabled={!hiddenCount} className="press text-[15px] text-link disabled:opacity-40">Unhide all ({hiddenCount})</button>
           </div>
         </GroupRow>
 
@@ -111,12 +111,12 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
 
         <GroupRow title="Backup">
           <Row className="py-2">
-            <button onClick={onExportData} className="press flex-1 text-[16px] text-[#0a84ff]">Export as .json file</button>
+            <button onClick={onExportData} className="press flex-1 text-[16px] text-link">Export as .json file</button>
           </Row>
           <label className="block cursor-pointer">
             <input type="file" accept=".json,application/json" className="hidden"
               onChange={(e) => { if (e.target.files?.[0]) onImportData(e.target.files[0]); e.target.value = ''; }} />
-            <div className="px-4 py-3 text-[16px] text-[#0a84ff] flex items-center justify-between">
+            <div className="px-4 py-3 text-[16px] text-link flex items-center justify-between">
               <span>Restore from file</span><IconChevron className="w-4 h-4 text-white/30" />
             </div>
           </label>

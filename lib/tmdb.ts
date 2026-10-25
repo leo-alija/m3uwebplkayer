@@ -11,6 +11,7 @@ export type TmdbMeta = {
   genres?: { id: number; name: string }[];
   credits?: { cast?: { name: string; character?: string; profile_path?: string }[] };
   videos?: { results?: { key: string; site: string; type: string; name: string }[] };
+  similar?: { results?: { id: number; title?: string; name?: string; poster_path?: string; backdrop_path?: string; vote_average?: number; release_date?: string; first_air_date?: string }[] };
   name?: string;
   title?: string;
 };

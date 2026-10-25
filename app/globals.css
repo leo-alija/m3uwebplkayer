@@ -7,11 +7,25 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
+  /* AlgoPlay Design System — RGB triplets consumed by tailwind.config.ts */
+  --ground-rgb: 11 11 13;   /* #0b0b0d */
+  --pit-rgb: 20 20 22;      /* #141416 */
+  --deck-rgb: 22 22 24;     /* #161618 */
+  --card-rgb: 28 28 30;     /* #1c1c1e */
+  --card2-rgb: 41 41 44;    /* #29292c */
+  --raise-rgb: 44 44 46;    /* #2c2c2e */
+  --haze-rgb: 58 58 60;     /* #3a3a3c */
+  --accent-rgb: 255 122 42; /* #ff7a2a */
+  --berry-rgb: 255 45 85;   /* #ff2d55 */
+  --link-rgb: 10 132 255;   /* #0a84ff */
+  --star-rgb: 255 214 10;   /* #ffd60a */
+  --violet-rgb: 124 58 237; /* #7c3aed */
+  --text-rgb: 245 245 247;  /* #f5f5f7 */
 }
 
 html, body {
-  background: #000;
-  color: #f5f5f7;
+  background: rgb(var(--ground-rgb));
+  color: rgb(var(--text-rgb));
   height: 100%;
   overscroll-behavior: none;
 }
@@ -43,13 +57,13 @@ input, select, textarea, button { font-size: 16px; }
 
 /* iOS frosted surfaces */
 .ios-blur {
-  background: rgba(22, 22, 24, 0.72);
+  background: rgb(var(--deck-rgb) / 0.72);
   -webkit-backdrop-filter: saturate(180%) blur(24px);
   backdrop-filter: saturate(180%) blur(24px);
 }
 
 .ios-card {
-  background: rgba(28, 28, 30, 0.92);
+  background: rgb(var(--card-rgb) / 0.92);
   border-radius: 14px;
 }
 
@@ -87,9 +101,9 @@ img { -webkit-user-drag: none; user-select: none; }
   filter: blur(46px);
   opacity: 0.55;
 }
-.aurora.a { width: 60vw; height: 60vw; left: -18vw; top: -18vw; background: radial-gradient(circle, #ff7a2a 0%, transparent 65%); animation: drift 14s ease-in-out infinite alternate; }
-.aurora.b { width: 55vw; height: 55vw; right: -16vw; top: -10vw; background: radial-gradient(circle, #7c3aed 0%, transparent 65%); animation: drift 18s ease-in-out infinite alternate-reverse; }
-.aurora.c { width: 60vw; height: 40vw; left: 8vw; bottom: -14vw; background: radial-gradient(circle, #0a84ff 0%, transparent 65%); animation: drift 22s ease-in-out infinite alternate; }
+.aurora.a { width: 60vw; height: 60vw; left: -18vw; top: -18vw; background: radial-gradient(circle, rgb(var(--accent-rgb)) 0%, transparent 65%); animation: drift 14s ease-in-out infinite alternate; }
+.aurora.b { width: 55vw; height: 55vw; right: -16vw; top: -10vw; background: radial-gradient(circle, rgb(var(--violet-rgb)) 0%, transparent 65%); animation: drift 18s ease-in-out infinite alternate-reverse; }
+.aurora.c { width: 60vw; height: 40vw; left: 8vw; bottom: -14vw; background: radial-gradient(circle, rgb(var(--link-rgb)) 0%, transparent 65%); animation: drift 22s ease-in-out infinite alternate; }
 @keyframes drift {
   from { transform: translate3d(0, 0, 0) scale(1); }
   to { transform: translate3d(6vw, 3vw, 0) scale(1.18); }
@@ -103,7 +117,7 @@ img { -webkit-user-drag: none; user-select: none; }
 
 /* Skeleton shimmer */
 .shimmer {
-  background: linear-gradient(100deg, #1c1c1e 40%, #29292c 50%, #1c1c1e 60%);
+  background: linear-gradient(100deg, rgb(var(--card-rgb)) 40%, rgb(var(--card2-rgb)) 50%, rgb(var(--card-rgb)) 60%);
   background-size: 200% 100%;
   animation: shimmer 1.4s linear infinite;
 }

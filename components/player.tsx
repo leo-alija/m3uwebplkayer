@@ -37,12 +37,14 @@ export default function Player(p: Props) {
   const hlsRef = useRef<HlsJs | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSave = useRef(0);
+  const recoveries = useRef(0);
   const tapTime = useRef(0);
   const tapSide = useRef('');
   const [controls, setControls] = useState(true);
   const [airplay, setAirplay] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [buffering, setBuffering] = useState(true);
+  const [blocked, setBlocked] = useState(false);
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState('');
   const [time, setTime] = useState(0);
@@ -120,9 +122,11 @@ export default function Player(p: Props) {
       if (isHlsUrl && !isIOS && Hls.isSupported()) {
         const hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 90 });
         hlsRef.current = hls;
+        recoveries.current = 0;
         hls.loadSource(url);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
+          recoveries.current = 0;
           setLevels(data.levels.map((l, i) => ({ i, label: l.height ? `${l.height}p` : `${Math.round((l.bitrate || 0) / 1000)}k` })));
         });
         hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => setCurLevel(hls.autoLevelEnabled ? -1 : data.level));
@@ -148,10 +152,23 @@ export default function Player(p: Props) {
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                hls.startLoad();
+                /* give dead networks a bounded number of retries, then fail visibly */
+                if (recoveries.current >= 6) {
+                  setError('Stream unavailable — it may be offline or blocked. Try again later.');
+                  setBuffering(false);
+                } else {
+                  recoveries.current += 1;
+                  hls.startLoad();
+                }
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
+                if (recoveries.current >= 6) {
+                  setError('This stream could not be played.');
+                  setBuffering(false);
+                } else {
+                  recoveries.current += 1;
+                  hls.recoverMediaError();
+                }
                 break;
               default:
                 setError('This stream could not be played.');
@@ -167,8 +184,12 @@ export default function Player(p: Props) {
         video.addEventListener('loadedmetadata', () => { try { video.currentTime = p.resume!; } catch {} }, { once: true });
       }
       video.play().then(() => setBuffering(false)).catch(() => {
-        /* autoplay blocked — user taps play */
-        if (!cancelled) setBuffering(false);
+        /* autoplay blocked — surface a persistent tap-to-play instead of a dead black frame */
+        if (!cancelled) {
+          setBuffering(false);
+          setBlocked(true);
+          showControls(true);
+        }
       });
     })();
 
@@ -206,7 +227,7 @@ export default function Player(p: Props) {
     const handlers: [string, () => void][] = [
       ['timeupdate', onTime], ['loadedmetadata', onTime], ['progress', onTime],
       ['play', () => setPlaying(true)], ['pause', () => { setPlaying(false); if (!live) p.onProgress(p.channel.id, v.currentTime, v.duration); }],
-      ['waiting', () => setBuffering(true)], ['playing', () => { setBuffering(false); setPlaying(true); }],
+      ['waiting', () => setBuffering(true)], ['playing', () => { setBuffering(false); setPlaying(true); setBlocked(false); }],
       ['volumechange', () => setMuted(v.muted)],
       ['error', () => { setError('This stream could not be played.'); setBuffering(false); }],
     ];
@@ -265,7 +286,11 @@ export default function Player(p: Props) {
     }
     tapTime.current = now;
     tapSide.current = side;
-    setTimeout(() => { if (tapTime.current === now) { setControls((c) => (c ? false : true)); if (!controls === true) showControls(); } }, 260);
+    setTimeout(() => {
+      if (tapTime.current !== now) return;
+      if (controls) { if (hideTimer.current) clearTimeout(hideTimer.current); setControls(false); }
+      else showControls();
+    }, 260);
   }
 
   /* ---------- keyboard ---------- */
@@ -354,12 +379,19 @@ export default function Player(p: Props) {
             </div>
           </div>
         )}
+        {blocked && !error && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/45"
+            onClick={() => { setBlocked(false); const v = videoRef.current; v?.play().catch(() => {}); showControls(true); }}>
+            <IconPlayCircle className="w-16 h-16 text-white drop-shadow-2xl" />
+            <span className="text-[13px] font-semibold text-white/85">Tap to play</span>
+          </div>
+        )}
         {error && (
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 px-8 text-center bg-black/75">
             <button onClick={p.onClose} className="press absolute top-[max(12px,var(--safe-t,0px))] left-3 p-2 text-white"><IconClose className="w-6 h-6" /></button>
             <div className="text-white/90 text-[15px]">{error}</div>
             <button onClick={(e) => { e.stopPropagation(); const v = videoRef.current; if (v) { v.load(); v.play().catch(() => {}); } setError(''); setBuffering(true); showControls(true); }}
-              className="press px-5 py-2.5 rounded-xl bg-[#ff7a2a] text-black text-[15px] font-bold">Retry</button>
+              className="press px-5 py-2.5 rounded-xl bg-accent text-black text-[15px] font-bold">Retry</button>
             <a href={p.channel.url} target="_blank" rel="noreferrer" className="press text-white/50 text-xs underline">Open stream URL</a>
           </div>
         )}
@@ -372,7 +404,7 @@ export default function Player(p: Props) {
               <div className="text-[16px] font-bold leading-snug">{nextCountdown.ep.episodeTitle}</div>
               <div className="text-[12px] text-white/50">Season {nextCountdown.ep.seasonNumber} · Episode {nextCountdown.ep.episodeNumber}</div>
               <div className="flex gap-2">
-                <button onClick={() => { setNextCountdown(null); p.onPlayEpisode(nextCountdown.ep); }} className="press flex-1 py-2.5 rounded-xl bg-[#ff7a2a] text-black font-bold">Play now</button>
+                <button onClick={() => { setNextCountdown(null); p.onPlayEpisode(nextCountdown.ep); }} className="press flex-1 py-2.5 rounded-xl bg-accent text-black font-bold">Play now</button>
                 <button onClick={() => setNextCountdown(null)} className="press flex-1 py-2.5 rounded-xl bg-white/10 font-semibold">Cancel</button>
               </div>
             </div>
@@ -394,7 +426,7 @@ export default function Player(p: Props) {
             </div>
             {airplay && <button onClick={toggleAirPlay} className="press p-2 text-white" title="AirPlay"><IconAirplay className="w-6 h-6" /></button>}
             <button onClick={togglePip} className="press p-2 text-white" title="Picture in picture"><IconPip className="w-6 h-6" /></button>
-            <button onClick={(e) => { e.stopPropagation(); contRef.current?.requestFullscreen?.().catch(() => {}); }} className="press p-2 text-white hidden" title="Fullscreen">
+            <button onClick={(e) => { e.stopPropagation(); contRef.current?.requestFullscreen?.().catch(() => {}); }} className="press p-2 text-white" title="Fullscreen">
               <span className="text-[15px]">⛶</span>
             </button>
           </div>
@@ -418,7 +450,7 @@ export default function Player(p: Props) {
                 <div className="relative flex-1 h-5 flex items-center" role="presentation">
                   <div className="absolute inset-x-0 h-1 rounded-full bg-white/20 overflow-hidden">
                     <div className="absolute inset-y-0 bg-white/35 rounded-full" style={{ width: `${buffered / duration * 100}%` }} />
-                    <div className="absolute inset-y-0 bg-[#ff7a2a] rounded-full" style={{ width: `${time / duration * 100}%` }} />
+                    <div className="absolute inset-y-0 bg-accent rounded-full" style={{ width: `${time / duration * 100}%` }} />
                   </div>
                   <input type="range" min={0} max={duration} step={0.5} value={time} onChange={(e) => seekTo(parseFloat(e.target.value))}
                     className="absolute inset-0 w-full opacity-0 cursor-pointer" aria-label="Seek" />
@@ -452,8 +484,20 @@ export default function Player(p: Props) {
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={`w-6 h-6 ${muted ? 'opacity-40' : ''}`}><path d="M4 9v6h4l5 4V5L8 9H4z" strokeLinejoin="round" /><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" strokeLinecap="round" /></svg>
                 )}
               </button>
+              {!isIOS && (
+                <input type="range" min={0} max={1} step={0.05} defaultValue={1} aria-label="Volume"
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => {
+                    const v = videoRef.current;
+                    if (v) {
+                      v.volume = parseFloat(e.target.value);
+                      if (v.volume > 0 && v.muted) { v.muted = false; setMuted(false); }
+                    }
+                  }}
+                  className="press w-16 accent-accent" />
+              )}
               <button onClick={(e) => { e.stopPropagation(); p.onToggleFav(); }} className="press p-2.5" title="Favourite">
-                <IconStar filled={liked} className={`w-6 h-6 ${liked ? 'text-[#ff7a2a]' : ''}`} />
+                <IconStar filled={liked} className={`w-6 h-6 ${liked ? 'text-accent' : ''}`} />
               </button>
               <button onClick={(e) => { e.stopPropagation(); p.onAddMv(); }} className="press p-2.5" title="Add to multiview"><IconPlus className="w-6 h-6" /></button>
               <div className="flex-1" />
@@ -492,7 +536,7 @@ export default function Player(p: Props) {
       </div>
 
       {/* INFO AREA (portrait) */}
-      <div className="scroll-y flex-1 min-h-0 player-info bg-[#0b0b0d] p-4 pb-[calc(28px+var(--safe-b,0px))] space-y-4">
+      <div className="scroll-y flex-1 min-h-0 player-info bg-ground p-4 pb-[calc(28px+var(--safe-b,0px))] space-y-4">
         <div className="ios-card p-4 space-y-1.5">
           <div className="font-bold text-[17px] leading-snug">{p.channel.name}</div>
           <div className="text-[13px] text-white/55 flex flex-wrap gap-x-2 gap-y-1">
@@ -501,7 +545,7 @@ export default function Player(p: Props) {
           </div>
           {p.meta && (
             <div className="pt-1.5 space-y-1">
-              {p.meta.vote_average > 0 && <div className="text-[13px] text-[#ffd60a]">★ {p.meta.vote_average.toFixed(1)}</div>}
+              {p.meta.vote_average > 0 && <div className="text-[13px] text-star">★ {p.meta.vote_average.toFixed(1)}</div>}
               {p.meta.overview && <div className="text-[13px] text-white/60 leading-relaxed line-clamp-4">{p.meta.overview}</div>}
             </div>
           )}
@@ -511,8 +555,8 @@ export default function Player(p: Props) {
           <div className="space-y-2">
             <div className="text-[13px] font-medium uppercase tracking-wide text-white/45 px-1">Programme guide</div>
             {p.nowNext?.now && (
-              <div className="ios-card p-4 border-l-4 border-[#ff7a2a]">
-                <div className="text-[11px] text-[#ff7a2a] font-bold mb-0.5">NOW</div>
+              <div className="ios-card p-4 border-l-4 border-accent">
+                <div className="text-[11px] text-accent font-bold mb-0.5">NOW</div>
                 <div className="font-semibold text-[15px]">{p.nowNext.now.title}</div>
                 {p.nowNext.now.desc && <div className="text-[13px] text-white/55 mt-1 line-clamp-3">{p.nowNext.now.desc}</div>}
               </div>
@@ -536,8 +580,8 @@ export default function Player(p: Props) {
                   .sort((a, b) => a.episodeNumber - b.episodeNumber)
                   .map((e) => (
                     <button key={e.channel.id} onClick={() => p.onPlayEpisode(e)}
-                      className={`press w-full text-left ios-card px-4 py-3 flex items-center gap-3 ${e.channel.id === p.channel.id ? 'bg-[#ff7a2a]/15' : ''}`}>
-                      <div className={`text-[12px] w-9 shrink-0 font-mono ${e.channel.id === p.channel.id ? 'text-[#ff7a2a]' : 'text-white/40'}`}>E{e.episodeNumber}</div>
+                      className={`press w-full text-left ios-card px-4 py-3 flex items-center gap-3 ${e.channel.id === p.channel.id ? 'bg-accent/15' : ''}`}>
+                      <div className={`text-[12px] w-9 shrink-0 font-mono ${e.channel.id === p.channel.id ? 'text-accent' : 'text-white/40'}`}>E{e.episodeNumber}</div>
                       <div className="min-w-0">
                         <div className="text-[14px] truncate">{e.episodeTitle}</div>
                         {e.episodeTitle !== e.channel.name && <div className="text-[11px] text-white/35 truncate">{e.channel.name}</div>}

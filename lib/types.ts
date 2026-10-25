@@ -61,4 +61,6 @@ export type Profile = {
   groupOrder: string[];
   continueWatching: { channelId: string; time: number; duration?: number; updatedAt?: number }[];
   watchHistory: string[];
+  watchlist: string[];
+  playCounts: Record<string, number>;
 };

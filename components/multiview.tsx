@@ -42,13 +42,13 @@ function MVTile({ ch, onExpand, onRemove, solo, onSolo, twoCol }: { ch: Channel;
         </div>
       )}
       <div className="absolute top-1 left-1.5 right-1 flex items-center gap-1">
-        <div className={`min-w-0 flex-1 truncate text-[10px] px-1.5 py-0.5 rounded-md ${solo ? 'bg-[#ff7a2a] text-black font-bold' : 'bg-black/60'}`}>
+        <div className={`min-w-0 flex-1 truncate text-[10px] px-1.5 py-0.5 rounded-md ${solo ? 'bg-accent text-black font-bold' : 'bg-black/60'}`}>
           {solo ? '♪ ' : ''}{ch.name}
         </div>
       </div>
       <div className="absolute bottom-1 right-1 flex gap-1">
         <button onClick={onSolo} className="press w-7 h-7 rounded-full bg-black/70 text-[10px] font-bold" title="Solo audio">{solo ? '♪' : '🔇'}</button>
-        <button onClick={onExpand} className="press w-7 h-7 rounded-full bg-[#ff7a2a] text-black font-bold" title="Watch full screen">⤢</button>
+        <button onClick={onExpand} className="press w-7 h-7 rounded-full bg-accent text-black font-bold" title="Watch full screen">⤢</button>
         <button onClick={onRemove} className="press w-7 h-7 rounded-full bg-black/70 text-[11px]" title="Remove">✕</button>
       </div>
     </div>
