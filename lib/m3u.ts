@@ -195,7 +195,11 @@ export function parseM3U(text: string): { channels: Channel[]; epgUrl?: string }
   if (entries.length === 0) return { channels: [], epgUrl };
 
   const ordered = [...entries].sort((a, b) => a.rank - b.rank);
-  const highestExplicit = Math.max(0, ...entries.map((e) => e.explicitNumber || 0));
+  // Math.max(...arr) overflows the call stack on large playlists (URL imports can be 100k+ entries)
+  let highestExplicit = 0;
+  for (const e of entries) {
+    if (e.explicitNumber != null && e.explicitNumber > highestExplicit) highestExplicit = e.explicitNumber;
+  }
   let nextImplicit = highestExplicit + 1;
 
   const channels: Channel[] = ordered.map((e, index) => ({
