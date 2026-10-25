@@ -4,11 +4,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { GUARD_ERROR, isPubliclyResolvable, parseTargetUrl } from './guard';
 
-const MAX_TEXT_BYTES = 64 * 1024 * 1024;       // playlists: 64 MB (50k-entry m3u_plus can be 30 MB+)
-const MAX_BIN_BYTES = 10 * 1024 ** 3;          // downloads: 10 GB
-const HEADER_TIMEOUT_MS = 15_000;              // to first response headers per hop
-const TEXT_IDLE_TIMEOUT_MS = 20_000;           // stalled stream: no bytes for this long
-const TEXT_TOTAL_TIMEOUT_MS = 120_000;         // overall cap for a text read
+const MAX_TEXT_BYTES = 512 * 1024 * 1024;     // playlists: 512 MB (m3u_plus pastes can be far past 64 MB)
+const MAX_BIN_BYTES = 10 * 1024 ** 3;         // downloads: 10 GB
+const HEADER_TIMEOUT_MS = 15_000;             // to first response headers per hop
+const TEXT_IDLE_TIMEOUT_MS = 30_000;          // stalled stream: no bytes for this long (resets per chunk — no total cap, size never triggers it)
 const MAX_REDIRECTS = 5;
 
 export const runtime = 'nodejs';
@@ -40,32 +39,34 @@ async function hop(
   return res;
 }
 
-async function readCapped(res: Response, maxBytes: number, idleMs: number, totalMs: number): Promise<string> {
+async function readCapped(res: Response, maxBytes: number, idleMs: number): Promise<string> {
   const reader = res.body?.getReader();
   if (!reader) return '';
-  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
   let bytes = 0;
-  let text = '';
   /* The idle timer resets on every received chunk, so a slow but flowing
-     provider (huge m3u_plus over a thin pipe) isn't cut off — only a stalled
-     stream is. The overall timer bounds the read no matter what. */
+     provider (huge m3u_plus over a thin pipe) is never cut off — only a fully
+     stalled stream is. There is deliberately no overall timer: playlist size
+     alone must never trip it. */
   let idle = setTimeout(() => reader.cancel(new Error('timeout')), idleMs);
-  const overall = setTimeout(() => reader.cancel(new Error('timeout')), totalMs);
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      clearTimeout(idle);
-      idle = setTimeout(() => reader.cancel(new Error('timeout')), idleMs);
+      idle = refreshIdle(idle, () => reader.cancel(new Error('timeout')), idleMs);
       bytes += value.byteLength;
       if (bytes > maxBytes) throw new Error('response too large');
-      text += decoder.decode(value, { stream: true });
+      chunks.push(value);
     }
   } finally {
     clearTimeout(idle);
-    clearTimeout(overall);
   }
-  return text + decoder.decode();
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString('utf8');
+}
+
+function refreshIdle(timer: ReturnType<typeof setTimeout>, cancel: () => void, idleMs: number) {
+  clearTimeout(timer);
+  return setTimeout(cancel, idleMs);
 }
 
 export async function GET(req: NextRequest) {
@@ -119,7 +120,7 @@ export async function GET(req: NextRequest) {
     }
 
     clearTimeout(timer);
-    const text = await readCapped(res, MAX_TEXT_BYTES, TEXT_IDLE_TIMEOUT_MS, TEXT_TOTAL_TIMEOUT_MS);
+    const text = await readCapped(res, MAX_TEXT_BYTES, TEXT_IDLE_TIMEOUT_MS);
     return new NextResponse(text, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'fetch failed' }, { status: 502 });

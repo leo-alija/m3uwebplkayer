@@ -240,6 +240,29 @@ export function parseM3U(text: string): { channels: Channel[]; epgUrl?: string }
   return scanner.finish();
 }
 
+/* Line iteration without materialising one giant array — a multi-hundred-MB
+   playlist split()ed at once can exhaust memory on mobile Safari. Lines are
+   sliced lazily and garbage-collected as the scanner consumes them. */
+export function* iterateLines(text: string): Generator<string> {
+  let start = 0;
+  const len = text.length;
+  while (start < len) {
+    let nl = text.indexOf('\n', start);
+    if (nl === -1) nl = len;
+    let line = text.slice(start, nl);
+    if (line.charCodeAt(line.length - 1) === 13) line = line.slice(0, -1); // \r
+    yield line;
+    start = nl + 1;
+  }
+}
+
+export function countLines(text: string): number {
+  if (!text) return 0;
+  let n = 0;
+  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) n++;
+  return text.endsWith('\n') ? n : n + 1;
+}
+
 export function buildXtreamM3uUrl(host: string, user: string, pass: string, output = 'ts') {
   const h = host.replace(/\/+$/, '');
   return `${h}/get.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&type=m3u_plus&output=${output}`;

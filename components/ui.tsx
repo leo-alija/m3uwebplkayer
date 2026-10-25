@@ -39,8 +39,8 @@ export const IconSearch = ({ className }: IProps) => (
 );
 export const IconSettings = ({ className }: IProps) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className={`${base} ${className || ''}`}>
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
     <circle cx="12" cy="12" r="3" />
-    <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1" />
   </svg>
 );
 export const IconClose = ({ className }: IProps) => (
@@ -94,14 +94,16 @@ export const IconTrash = ({ className }: IProps) => (
     <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" /><path d="M10 11v6M14 11v6" />
   </svg>
 );
+/* evenodd cuts the inner glyph out of the filled circle — without it the
+   glyph and disc fill as one solid blob */
 export const IconPlayCircle = ({ className }: IProps) => (
   <svg viewBox="0 0 24 24" fill="currentColor" className={`${base} ${className || ''}`}>
-    <path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zM10 7.8v8.4l7-4.2-7-4.2z" />
+    <path fillRule="evenodd" clipRule="evenodd" d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zM10 7.8v8.4l7-4.2-7-4.2z" />
   </svg>
 );
 export const IconPauseCircle = ({ className }: IProps) => (
   <svg viewBox="0 0 24 24" fill="currentColor" className={`${base} ${className || ''}`}>
-    <path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zM9.5 7.5h1.8v9H9.5zM12.7 7.5h1.8v9h-1.8z" />
+    <path fillRule="evenodd" clipRule="evenodd" d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zM9.5 7.5h1.8v9H9.5zM12.7 7.5h1.8v9h-1.8z" />
   </svg>
 );
 export const IconSpeed = ({ className }: IProps) => (

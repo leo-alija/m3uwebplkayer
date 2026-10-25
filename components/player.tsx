@@ -7,7 +7,7 @@ import { load, save } from '@/lib/storage';
 import { isIOS, iosVersion, supportsMms, mmsEnabled, preferHlsJs } from '@/lib/env';
 import { attachMediaSession } from '@/lib/media-session';
 import { canDownload, isDownloaded, getDownloadBlob } from '@/lib/downloads';
-import { IconClose, IconStar, IconPip, IconAirplay, IconPlus, IconPlayCircle, IconPauseCircle, IconChevron, IconCC, IconFullscreen, IconFullscreenExit } from './ui';
+import { IconClose, IconStar, IconPip, IconAirplay, IconPlus, IconPlayCircle, IconPauseCircle, IconChevron, IconCC, IconFullscreen, IconFullscreenExit, IconSettings } from './ui';
 
 type Props = {
   channel: Channel;
@@ -634,10 +634,7 @@ export default function Player(p: Props) {
               )}
               {hasSettings && (
                 <button onClick={(e) => { e.stopPropagation(); setSettings((s) => !s); showControls(true); }} className={`press p-2.5 ${settings ? 'text-accent' : 'text-white/90'}`} title="Playback settings">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" className="w-6 h-6">
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1" />
-                  </svg>
+                  <IconSettings className="w-6 h-6" />
                 </button>
               )}
               <button onClick={(e) => { e.stopPropagation(); p.onToggleFav(); }} className="press p-2.5" title="Favourite">
