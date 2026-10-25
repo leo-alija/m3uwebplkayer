@@ -13,6 +13,7 @@ import DetailSheet from '@/components/detail';
 import { ImportSheet, ProfilesSheet, PinOverlay, SearchOverlay } from '@/components/sheets';
 import { SettingsSheet } from '@/components/settings';
 import { Hero, Shelf, LiveTile, PosterCard, Aurora, Skeletons, GenreStrip, type HeroSlide } from '@/components/home-flix';
+import { GuideGrid } from '@/components/guide-grid';
 import { IconHome, IconLive, IconSeries, IconMovie, IconGuide, IconSearch, IconSettings, IconStar, IconPlus, IconChevron, IconPlayCircle, Poster, Chip, IconClose } from '@/components/ui';
 
 type Tab = 'home' | 'live' | 'series' | 'movies' | 'guide';
@@ -428,25 +429,6 @@ export default function Home() {
     return folder?.episodes;
   }, [selected, seriesFolders]);
 
-  /* guide tab rows */
-  const guideRows = useMemo(() => {
-    return liveList.slice(0, visible.guide).map((ch) => {
-      const progs = epgFor(ch);
-      const now = progs?.find((p2) => {
-        const s = parseXmltvDate(p2.start).getTime(), e = parseXmltvDate(p2.stop).getTime();
-        return s <= Date.now() && Date.now() < e;
-      });
-      const next = progs?.find((p2) =>
-        (!now || parseXmltvDate(p2.start) >= parseXmltvDate(now.stop)) && parseXmltvDate(p2.stop) > new Date());
-      let pct = 0;
-      if (now) {
-        const s = parseXmltvDate(now.start).getTime(), e = parseXmltvDate(now.stop).getTime();
-        pct = Math.min(100, Math.max(0, ((Date.now() - s) / (e - s)) * 100));
-      }
-      return { ch, now, next, pct };
-    });
-  }, [liveList, visible.guide, epgFor]);
-
   const tabTitle: Record<Tab, string> = { home: 'Home', live: 'Live TV', series: 'Series', movies: 'Films', guide: 'Guide' };
 
   return (
@@ -584,7 +566,8 @@ export default function Home() {
             )}
 
             {tab === 'guide' && (
-              <GuideTab rows={guideRows} onPlay={selectChannel}
+              <GuideGrid channels={liveList.slice(0, visible.guide)} epgFor={epgFor}
+                onPlay={selectChannel} onCatchup={(ch: Channel) => selectChannel(ch)}
                 loadMore={() => setVisible((v) => ({ ...v, guide: v.guide + 120 }))}
                 total={liveList.length} />
             )}
@@ -793,45 +776,3 @@ function GridTab({ items, kind, visibleCount, loadMore, onOpen, favSet }: any) {
   );
 }
 
-/* ================= Guide tab ================= */
-
-function GuideTab({ rows, onPlay, loadMore, total }: any) {
-  return (
-    <div>
-      <div className="ios-card mx-4 divide-y divide-white/5">
-        {rows.map(({ ch, now, next, pct }: any) => (
-          <button key={ch.id} onClick={() => onPlay(ch)} className="press w-full flex items-center gap-3 px-3 py-2.5 text-left">
-            <Poster src={ch.logo} className="w-10 h-10 rounded-lg shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-[15px] font-medium truncate">{ch.name}</div>
-              {now ? (
-                <div className="mt-0.5">
-                  <div className="text-[12px] truncate text-white/80">
-                    <span className="text-[#ff7a2a] font-bold mr-1.5">NOW</span>{now.title}
-                  </div>
-                  <div className="mt-1 h-1 bg-white/10 rounded-full overflow-hidden w-full">
-                    <div className="h-full bg-[#ff7a2a]" style={{ width: `${pct}%` }} />
-                  </div>
-                  {next && <div className="text-[11px] text-white/35 truncate mt-1">Next {fmtClock(next.start)} · {next.title}</div>}
-                </div>
-              ) : (
-                <div className="text-[11px] text-white/35 mt-0.5">No programme data</div>
-              )}
-            </div>
-          </button>
-        ))}
-        {rows.length === 0 && <div className="p-6 text-center text-white/40 text-[14px]">No guide in this playlist.</div>}
-      </div>
-      {total > rows.length && (
-        <div className="py-3 text-center">
-          <button onClick={loadMore} className="press text-[14px] text-[#0a84ff]">Show more</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function fmtClock(xmltv: string) {
-  if (xmltv.length >= 12) return `${xmltv.slice(8, 10)}:${xmltv.slice(10, 12)}`;
-  return xmltv;
-}

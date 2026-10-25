@@ -27,7 +27,7 @@ Repo unchanged since the "build plan" commit — PLAN.md phases 0–5 are all st
 | 1 ✅ | Bug: `tvgName` stale-attr in `lib/m3u.ts:207` — restore entry-attr read; regression test lands with Stage 5 suite | EPG-by-name works; unit test proves |
 | 2 ✅ | Security: `/api/fetch` SSRF hardening (`app/api/fetch/route.ts:4–10`): scheme/host allow-list, private-IP + IPv4-mapped-IPv6 + localhost block, size cap (bin vs text), strict timeout; public request contract unchanged (same shape, Range passthrough); tests beside route | malicious-URL test suite green |
 | 3 ✅ | AirPlay: un-hide webkit controls (`globals.css:75`) or programmatic `x-webkit-airplay` route | AirPlay button surfaces on iOS |
-| 4 | EPG timeline grid `components/guide-grid.tsx` (rows → real grid), tap → player, now-line, mini catch-up entry | grid renders + navigates |
+| 4 ✅ | EPG timeline grid `components/guide-grid.tsx` (rows → real grid), tap → player, now-line, mini catch-up entry | grid renders + navigates |
 | 5 | Catch-up engine `lib/catchup.ts`: URL builder per provider mode (parser already reads catchup tags), playback route, "catch-up from EPG" entry point | playback starts from the EPG entry |
 | 6 | Netflix set: watchlist shelf, Top 10 shelf, More Like This, design tokens (phase out 50+ hardcoded hexes to CSS vars) | shelves live, plugin-free tokens |
 | 7 | iOS stack: hls.js via ManagedMediaSource (17.1+, keep native fallback < 17.1), Media Session lock-screen, multiview device tile caps, offline-download quota guard (eviction reminder), PWA update toast | feature flag + device matrix notes |
