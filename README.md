@@ -23,7 +23,7 @@ Repo unchanged since the "build plan" commit — PLAN.md phases 0–5 are all st
 
 | Stage | Task | Done means |
 |---|---|---|
-| 0 | Hygiene: dynamic hls.js import (`components/player.tsx:4` → dynamic), remove unused zustand, pin eslint + config exact versions, `.nvmrc`, `.env.example`, README (this file) fresh | fresh `npm ci && npm run build && npm run typecheck` clean |
+| 0 ✅ | Hygiene: dynamic hls.js import (`components/player.tsx` → dynamic), remove unused zustand, pin eslint + config exact versions, `.nvmrc`, `.env.example`, README (this file) fresh | fresh `npm ci && npm run build && npm run typecheck` clean |
 | 1 | Bug: `tvgName` stale-attr in `lib/m3u.ts:207` — restore entry-attr read; regression test lands with Stage 5 suite | EPG-by-name works; unit test proves |
 | 2 | Security: `/api/fetch` SSRF hardening (`app/api/fetch/route.ts:4–10`): scheme/host allow-list, private-IP + IPv4-mapped-IPv6 + localhost block, size cap (bin vs text), strict timeout; public request contract unchanged (same shape, Range passthrough); tests beside route | malicious-URL test suite green |
 | 3 | AirPlay: un-hide webkit controls (`globals.css:75`) or programmatic `x-webkit-airplay` route | AirPlay button surfaces on iOS |

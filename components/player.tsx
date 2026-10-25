@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import Hls from 'hls.js';
+import type HlsJs from 'hls.js';
 import { Channel, Program, SeriesEpisode } from '@/lib/types';
 import { load, save } from '@/lib/storage';
 import { NATIVE_HLS } from '@/lib/env';
@@ -33,7 +33,7 @@ function fmtTime(s: number) {
 export default function Player(p: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const contRef = useRef<HTMLDivElement>(null);
-  const hlsRef = useRef<Hls | null>(null);
+  const hlsRef = useRef<HlsJs | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSave = useRef(0);
   const tapTime = useRef(0);
@@ -109,61 +109,66 @@ export default function Player(p: Props) {
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     const url = offlineUrl || p.channel.url;
     const isHlsUrl = /m3u8/.test(url);
-
-    if (isHlsUrl && !isIOS && Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 90 });
-      hlsRef.current = hls;
-      hls.loadSource(url);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
-        setLevels(data.levels.map((l, i) => ({ i, label: l.height ? `${l.height}p` : `${Math.round((l.bitrate || 0) / 1000)}k` })));
-      });
-      hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => setCurLevel(hls.autoLevelEnabled ? -1 : data.level));
-      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
-        const names = new Set<string>();
-        setAudioTracks(hls.audioTracks.map((a, i) => {
-          let label = a.name || a.lang || `Track ${i + 1}`;
-          let n = 2; let base = label;
-          while (names.has(label)) label = `${base} ${n++}`;
-          names.add(label);
-          return { i, label };
-        }));
-      });
-      hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
-        setSubTracks(hls.subtitleTracks.map((s, i) => ({ i, label: s.name || s.lang || `Subs ${i + 1}` })));
-        const pref = load('subLang', '');
-        if (pref) {
-          const idx = hls.subtitleTracks.findIndex((s) => (s.lang || s.name || '') === pref);
-          if (idx >= 0) { hls.subtitleDisplay = true; hls.subtitleTrack = idx; setSubTrack(idx); }
-        }
-      });
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal) {
-          switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
-              hls.startLoad();
-              break;
-            case Hls.ErrorTypes.MEDIA_ERROR:
-              hls.recoverMediaError();
-              break;
-            default:
-              setError('This stream could not be played.');
-              setBuffering(false);
-          }
-        }
-      });
-    } else {
-      video.src = url; /* native HLS on iOS, or plain mp4 */
-    }
-
-    if (p.resume && p.resume > 5) {
-      video.addEventListener('loadedmetadata', () => { try { video.currentTime = p.resume!; } catch {} }, { once: true });
-    }
     let cancelled = false;
-    video.play().then(() => setBuffering(false)).catch(() => {
-      /* autoplay blocked — user taps play */
-      if (!cancelled) setBuffering(false);
-    });
+
+    (async () => {
+      const Hls = (await import('hls.js')).default;
+      if (cancelled) return;
+      if (isHlsUrl && !isIOS && Hls.isSupported()) {
+        const hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 90 });
+        hlsRef.current = hls;
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
+          setLevels(data.levels.map((l, i) => ({ i, label: l.height ? `${l.height}p` : `${Math.round((l.bitrate || 0) / 1000)}k` })));
+        });
+        hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => setCurLevel(hls.autoLevelEnabled ? -1 : data.level));
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+          const names = new Set<string>();
+          setAudioTracks(hls.audioTracks.map((a, i) => {
+            let label = a.name || a.lang || `Track ${i + 1}`;
+            let n = 2; let base = label;
+            while (names.has(label)) label = `${base} ${n++}`;
+            names.add(label);
+            return { i, label };
+          }));
+        });
+        hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
+          setSubTracks(hls.subtitleTracks.map((s, i) => ({ i, label: s.name || s.lang || `Subs ${i + 1}` })));
+          const pref = load('subLang', '');
+          if (pref) {
+            const idx = hls.subtitleTracks.findIndex((s) => (s.lang || s.name || '') === pref);
+            if (idx >= 0) { hls.subtitleDisplay = true; hls.subtitleTrack = idx; setSubTrack(idx); }
+          }
+        });
+        hls.on(Hls.Events.ERROR, (_e, data) => {
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                hls.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError();
+                break;
+              default:
+                setError('This stream could not be played.');
+                setBuffering(false);
+            }
+          }
+        });
+      } else {
+        video.src = url; /* native HLS on iOS, or plain mp4 */
+      }
+
+      if (p.resume && p.resume > 5) {
+        video.addEventListener('loadedmetadata', () => { try { video.currentTime = p.resume!; } catch {} }, { once: true });
+      }
+      video.play().then(() => setBuffering(false)).catch(() => {
+        /* autoplay blocked — user taps play */
+        if (!cancelled) setBuffering(false);
+      });
+    })();
+
     return () => { cancelled = true; };
   }, [p.channel.id, offlineResolved, offlineUrl]);
 
