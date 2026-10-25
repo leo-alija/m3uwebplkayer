@@ -12,6 +12,7 @@ type Props = {
   channel: Channel;
   resume?: number;
   isFav: boolean;
+  catchup?: boolean;
   nowNext?: { now?: Program; upcoming: Program[] };
   episodes?: SeriesEpisode[];
   meta?: any;
@@ -59,7 +60,7 @@ export default function Player(p: Props) {
   const [offlineUrl, setOfflineUrl] = useState<string | null>(null);
   const [offlineResolved, setOfflineResolved] = useState(false);
 
-  const live = p.channel.contentType !== 'MOVIE' && p.channel.contentType !== 'SERIES';
+  const live = p.channel.contentType !== 'MOVIE' && p.channel.contentType !== 'SERIES' && !p.catchup;
   const showSeek = !live && duration > 0;
 
   /* resolve offline copy (if this item was downloaded) */

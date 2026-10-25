@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { parseM3U, buildXtreamM3uUrl } from '@/lib/m3u';
+import { buildCatchupUrl } from '@/lib/catchup';
 import { parseXMLTV, nowProgram, parseXmltvDate } from '@/lib/epg';
 import { load, save, loadPlaylist, savePlaylist, clearPlaylist as clearPlaylistStore } from '@/lib/storage';
 import { groupIntoFolders } from '@/lib/series';
@@ -42,7 +43,7 @@ export default function Home() {
   const [importError, setImportError] = useState('');
   const [xtream, setXtream] = useState({ host: '', user: '', pass: '' });
 
-  const [selected, setSelected] = useState<{ channel: Channel; resume: number } | null>(null);
+  const [selected, setSelected] = useState<{ channel: Channel; resume: number; catchup?: boolean } | null>(null);
   const [detail, setDetail] = useState<{ kind: 'movie' | 'series'; title: string; folder?: SeriesFolder; channel?: Channel } | null>(null);
   const [gridView, setGridView] = useState(false);
   const [downloads, setDownloads] = useState<Record<string, { pct: number; done?: boolean }>>({});
@@ -229,9 +230,9 @@ export default function Home() {
     return m;
   }, [activeProfile.continueWatching]);
 
-  const selectChannel = useCallback((ch: Channel, resume?: number) => {
+  const selectChannel = useCallback((ch: Channel, resume?: number, catchup?: boolean) => {
     const r = resume ?? resumeMap[ch.id]?.time ?? 0;
-    setSelected({ channel: ch, resume: !ch.contentType || ch.contentType === 'LIVE' ? 0 : r });
+    setSelected({ channel: ch, resume: !ch.contentType || ch.contentType === 'LIVE' ? 0 : r, catchup });
     updateProfile({
       recents: [ch.id, ...activeProfile.recents.filter((x) => x !== ch.id)].slice(0, 30),
       watchHistory: [ch.id, ...activeProfile.watchHistory.filter((x) => x !== ch.id)].slice(0, 200),
@@ -567,7 +568,12 @@ export default function Home() {
 
             {tab === 'guide' && (
               <GuideGrid channels={liveList.slice(0, visible.guide)} epgFor={epgFor}
-                onPlay={selectChannel} onCatchup={(ch: Channel) => selectChannel(ch)}
+                onPlay={selectChannel}
+                onCatchup={(ch: Channel, prog: Program) => {
+                  const url = buildCatchupUrl(ch, prog);
+                  if (url) selectChannel({ ...ch, url }, 0, true);
+                  else selectChannel(ch);
+                }}
                 loadMore={() => setVisible((v) => ({ ...v, guide: v.guide + 120 }))}
                 total={liveList.length} />
             )}
@@ -592,6 +598,7 @@ export default function Home() {
         <Player
           channel={selected.channel}
           resume={selected.resume}
+          catchup={selected.catchup}
           isFav={favorites.includes(selected.channel.id)}
           nowNext={nowNext}
           episodes={playerEpisodes}
