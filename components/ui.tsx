@@ -63,6 +63,12 @@ export const IconPip = ({ className }: IProps) => (
     <rect x="2.5" y="4.5" width="19" height="15" rx="2.5" /><rect x="12" y="11" width="8" height="7" rx="1.5" fill="currentColor" stroke="none" />
   </svg>
 );
+export const IconAirplay = ({ className }: IProps) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className={`${base} ${className || ''}`}>
+    <path d="M5 16.5H4.5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H19" />
+    <path d="m12 14.5 5.5 7h-11l5.5-7z" fill="currentColor" stroke="none" />
+  </svg>
+);
 export const IconGrid = ({ className }: IProps) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" className={`${base} ${className || ''}`}>
     <rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="3" width="8" height="8" rx="1.5" /><rect x="3" y="13" width="8" height="8" rx="1.5" /><rect x="13" y="13" width="8" height="8" rx="1.5" />

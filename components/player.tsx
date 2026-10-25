@@ -6,7 +6,7 @@ import { Channel, Program, SeriesEpisode } from '@/lib/types';
 import { load, save } from '@/lib/storage';
 import { NATIVE_HLS } from '@/lib/env';
 import { canDownload, isDownloaded, getDownloadBlob } from '@/lib/downloads';
-import { IconClose, IconStar, IconPip, IconPlus, IconPlayCircle, IconPauseCircle, IconSpeed } from './ui';
+import { IconClose, IconStar, IconPip, IconAirplay, IconPlus, IconPlayCircle, IconPauseCircle, IconSpeed } from './ui';
 
 type Props = {
   channel: Channel;
@@ -39,6 +39,7 @@ export default function Player(p: Props) {
   const tapTime = useRef(0);
   const tapSide = useRef('');
   const [controls, setControls] = useState(true);
+  const [airplay, setAirplay] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [buffering, setBuffering] = useState(true);
   const [muted, setMuted] = useState(false);
@@ -99,6 +100,7 @@ export default function Player(p: Props) {
   }, []);
 
   useEffect(() => { showControls(); return () => { if (hideTimer.current) clearTimeout(hideTimer.current); }; }, []);
+  useEffect(() => { setAirplay('WebKitPlaybackTargetAvailabilityEvent' in window); }, []);
 
   /* ---------- source attach ---------- */
   useEffect(() => {
@@ -309,6 +311,11 @@ export default function Player(p: Props) {
       }
     } catch {}
   }
+  function toggleAirPlay(e?: React.MouseEvent) {
+    e?.stopPropagation();
+    const v = videoRef.current as any;
+    try { v?.webkitShowPlaybackTargetPicker?.(); } catch {}
+  }
   function seekTo(t: number) { const v = videoRef.current; if (v) { v.currentTime = t; setTime(t); showControls(true); } }
   function skip(d: number) { const v = videoRef.current; if (!v || live) return; v.currentTime = Math.max(0, Math.min(v.duration || 1e9, v.currentTime + d)); showControls(true); }
   function setRate2(r: number) { const v = videoRef.current; if (v) { v.playbackRate = r; setRate(r); } }
@@ -329,6 +336,7 @@ export default function Player(p: Props) {
         <video
           ref={videoRef}
           playsInline autoPlay controls={false}
+          x-webkit-airplay="allow"
           onClick={onVideoTap}
           className="w-full h-full bg-black player-video"
         />
@@ -383,6 +391,7 @@ export default function Player(p: Props) {
                 {p.channel.groups?.slice(0, 2).join(' · ') || p.channel.group}
               </div>
             </div>
+            {airplay && <button onClick={toggleAirPlay} className="press p-2 text-white" title="AirPlay"><IconAirplay className="w-6 h-6" /></button>}
             <button onClick={togglePip} className="press p-2 text-white" title="Picture in picture"><IconPip className="w-6 h-6" /></button>
             <button onClick={(e) => { e.stopPropagation(); contRef.current?.requestFullscreen?.().catch(() => {}); }} className="press p-2 text-white hidden" title="Fullscreen">
               <span className="text-[15px]">⛶</span>
