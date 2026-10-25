@@ -89,6 +89,16 @@ input, select, textarea, button { font-size: 16px; }
 video::-webkit-media-controls { display: none !important; }
 video::-webkit-media-text-track-container { transform: var(--subtitle-y, translateY(0)); }
 
+/* Subtitle presentation: dark backing + shadow so cues survive bright scenes */
+video::cue {
+  background: rgba(8, 8, 10, 0.6);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+}
+
+/* Seek bar grows on hover like a desktop player */
+.seek-track { height: 4px; transition: height 0.15s ease; }
+.seek-zone:hover .seek-track { height: 8px; }
+
 img { -webkit-user-drag: none; user-select: none; }
 
 .shelf { display: flex; gap: 10px; padding: 0 16px; }
@@ -135,3 +145,9 @@ img { -webkit-user-drag: none; user-select: none; }
   .player-video-area { height: 100dvh; width: 100%; flex: none !important; aspect-ratio: auto; }
   .player-info { display: none; }
 }
+/* Element fullscreen: video fills the screen, info panel goes away */
+.player-root:fullscreen, .player-root:-webkit-full-screen { background: #000; }
+.player-root:fullscreen .player-video-area, .player-root:-webkit-full-screen .player-video-area {
+  height: 100dvh; width: 100%; flex: none !important; aspect-ratio: auto;
+}
+.player-root:fullscreen .player-info, .player-root:-webkit-full-screen .player-info { display: none; }

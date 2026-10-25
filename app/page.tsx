@@ -473,6 +473,16 @@ export default function Home() {
     return list;
   }, [liveChannels, liveGroupPick, liveFilter]);
 
+  /* live TV zapping: previous/next channel inside the current live list */
+  const zapChannel = useCallback((dir: 1 | -1) => {
+    if (!selected) return;
+    const type = selected.channel.contentType;
+    if (type && type !== 'LIVE') return;
+    const idx = liveList.findIndex((c) => c.id === selected.channel.id);
+    if (idx === -1 || liveList.length < 2) return;
+    selectChannel(liveList[(idx + dir + liveList.length) % liveList.length]);
+  }, [selected, liveList, selectChannel]);
+
   const continueEntries = useMemo(() =>
     [...activeProfile.continueWatching]
       .sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0))
@@ -757,6 +767,7 @@ export default function Home() {
           onAddMv={() => addToMv(selected.channel)}
           onProgress={onProgress}
           onPlayEpisode={(ep) => selectChannel(ep.channel)}
+          onZap={zapChannel}
         />
       )}
 

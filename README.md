@@ -32,7 +32,7 @@ Repo unchanged since the "build plan" commit — PLAN.md phases 0–5 are all st
 | 6 ✅ | Netflix set: watchlist shelf, Top 10 shelf, More Like This, design tokens (phase out 50+ hardcoded hexes to CSS vars) | shelves live, plugin-free tokens |
 | 7 ✅ | iOS stack: hls.js via ManagedMediaSource (17.1+, keep native fallback < 17.1), Media Session lock-screen, multiview device tile caps, offline-download quota guard (eviction reminder), PWA update toast | feature flag + device matrix notes |
 | 8 ✅ | Perf/scale: worker M3U parse + import progress UI (50k entries no longer stall main thread); Xtream category refresh UX; logo fallback for logo-less channels | import progress w/ 50k fixture |
-| 9 | Tests: Vitest on m3u/series/epg/catchup, fixture `../popular-kids-iptv.m3u` + BOM/CRLF/malformed cases | suite green in CI |
+| 9 ✅ | Tests: Vitest on m3u/series/epg/catchup, fixture `../popular-kids-iptv.m3u` + BOM/CRLF/malformed cases | suite green in CI |
 | 10 | Owner manual QA (not automatable): Safari script from Stage 1 output — import URL/file/Xtream, keypad zapping, catch-up, MMS quality menu, multiview caps, lock-screen controls | checklist signed off |
 
 ### Stage 7 device matrix & feature flag
@@ -54,6 +54,12 @@ Feature flag: set localStorage key `mmsHls` to `off` to force native HLS on iOS 
 - M3U parsing runs in a module worker (`lib/m3u-worker.ts`) driven by the incremental `M3UScanner` in `lib/m3u.ts`; browsers without worker support fall back to chunked main-thread parsing with yields. Progress (download bytes → lines parsed → saving) renders in the Import sheet and during refresh.
 - Xtream refresh: the last import source (URL or Xtream login) is remembered in localStorage (`lastImport`) and Settings → Playlist gains "Refresh playlist", re-running the same pipeline with progress. Channel ids are index-derived, so refreshing an unchanged provider keeps favourites/history intact; file imports can't be refreshed.
 - Logo fallback: `Poster` renders a deterministic initials tile (SVG, hue hashed from the name) for logo-less channels or failed loads; `LiveTile` falls back to the channel name when its logo 404s.
+
+### Stage 9 notes
+
+- Tests: `lib/series.test.ts` (episode parsing SxxExx / 1x03 / "Season N Episode M" / episode-only, junk stripping, series art picking, folder grouping), `lib/epg.test.ts` (XMLTV grouping + entities, `parseXmltvDate` offsets, `nowProgram`), and fixture + malformed cases in `lib/m3u.test.ts`. The `../popular-kids-iptv.m3u` fixture is committed at `lib/fixtures/` so the suite is self-contained (CI doesn't depend on a sibling repo); it parses all 305 entries, survives BOM+CRLF mangling unchanged, and malformed playlists (empty text, bare URLs, EXTINF without a URL, unquoted commas, empty `#EXTVLCOPT` values) parse without throwing or leaking attributes.
+- Player makeover: the cramped `<select>` cluster is replaced by a Netflix-style "Playback settings" panel (speed, quality, audio, subtitles — now also available for live streams) opened from a gear button, plus a quick CC toggle that flips between the last chosen subtitle track and off (`C` key too). Fullscreen is a real toggle (button, `F` key, double-tap on the picture) that tracks browser state, attempts a landscape orientation lock on Android, and falls back to native video fullscreen (`webkitEnterFullscreen`) on iPhone Safari. Seek bar grows on hover with an accent thumb; subtitle cues get a dark backing + shadow.
+- Live TV zapping: the player gets channel up/down buttons on the right edge and ArrowUp/ArrowDown zap through the current live list (volume keys keep their role for non-live playback); `zapChannel` in `app/page.tsx` wraps around within the filtered list.
 
 ## Environment
 

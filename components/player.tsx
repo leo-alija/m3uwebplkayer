@@ -7,7 +7,7 @@ import { load, save } from '@/lib/storage';
 import { isIOS, iosVersion, supportsMms, mmsEnabled, preferHlsJs } from '@/lib/env';
 import { attachMediaSession } from '@/lib/media-session';
 import { canDownload, isDownloaded, getDownloadBlob } from '@/lib/downloads';
-import { IconClose, IconStar, IconPip, IconAirplay, IconPlus, IconPlayCircle, IconPauseCircle, IconSpeed } from './ui';
+import { IconClose, IconStar, IconPip, IconAirplay, IconPlus, IconPlayCircle, IconPauseCircle, IconChevron, IconCC, IconFullscreen, IconFullscreenExit } from './ui';
 
 type Props = {
   channel: Channel;
@@ -17,6 +17,8 @@ type Props = {
   nowNext?: { now?: Program; upcoming: Program[] };
   episodes?: SeriesEpisode[];
   meta?: any;
+  /* zap to the previous/next channel of the live list (live TV only) */
+  onZap?: (dir: 1 | -1) => void;
   onClose: () => void;
   onToggleFav: () => void;
   onAddMv: () => void;
@@ -38,6 +40,24 @@ function fmtTime(s: number) {
   return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + `:${String(sec).padStart(2, '0')}`;
 }
 
+/* settings-panel building blocks */
+function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} className={`press px-3 py-1.5 rounded-full text-[13px] font-semibold whitespace-nowrap ${active ? 'bg-accent text-black' : 'bg-white/10 text-white/85'}`}>
+      {children}
+    </button>
+  );
+}
+
+function SettingsSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[12px] font-semibold text-white/50 px-1">{label}</div>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
+    </div>
+  );
+}
+
 export default function Player(p: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const contRef = useRef<HTMLDivElement>(null);
@@ -49,6 +69,8 @@ export default function Player(p: Props) {
   const tapSide = useRef('');
   const [controls, setControls] = useState(true);
   const [airplay, setAirplay] = useState(false);
+  const [fs, setFs] = useState(false);
+  const [settings, setSettings] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [buffering, setBuffering] = useState(true);
   const [blocked, setBlocked] = useState(false);
@@ -111,6 +133,18 @@ export default function Player(p: Props) {
 
   useEffect(() => { showControls(); return () => { if (hideTimer.current) clearTimeout(hideTimer.current); }; }, []);
   useEffect(() => { setAirplay('WebKitPlaybackTargetAvailabilityEvent' in window); }, []);
+
+  /* fullscreen state follows the browser so the button (and Escape) stay in sync */
+  useEffect(() => {
+    const d = document as any;
+    const onChange = () => setFs(!!(d.fullscreenElement || d.webkitFullscreenElement));
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
+  }, []);
 
   /* ---------- source attach ---------- */
   useEffect(() => {
@@ -315,21 +349,26 @@ export default function Player(p: Props) {
     const now = Date.now();
     const x = e.clientX - window.innerWidth / 2;
     const side = x < -40 ? 'back' : x > 40 ? 'fwd' : 'mid';
-    if (now - tapTime.current < 300 && tapSide.current === side && side !== 'mid') {
-      /* double tap → seek ±10 */
-      const v = videoRef.current;
-      if (v && !live) {
-        v.currentTime = Math.max(0, Math.min(v.duration || 1e9, v.currentTime + (side === 'back' ? -10 : 10)));
-        setFlash(side === 'back' ? 'back' : 'fwd');
-        setTimeout(() => setFlash(null), 400);
-      }
+    if (now - tapTime.current < 300 && tapSide.current === side) {
       tapTime.current = 0;
+      if (side === 'mid') {
+        toggleFullscreen(); /* double-tap the picture like YouTube */
+      } else {
+        /* double tap → seek ±10 */
+        const v = videoRef.current;
+        if (v && !live) {
+          v.currentTime = Math.max(0, Math.min(v.duration || 1e9, v.currentTime + (side === 'back' ? -10 : 10)));
+          setFlash(side === 'back' ? 'back' : 'fwd');
+          setTimeout(() => setFlash(null), 400);
+        }
+      }
       return;
     }
     tapTime.current = now;
     tapSide.current = side;
     setTimeout(() => {
       if (tapTime.current !== now) return;
+      if (settings) { setSettings(false); return; }
       if (controls) { if (hideTimer.current) clearTimeout(hideTimer.current); setControls(false); }
       else showControls();
     }, 260);
@@ -343,20 +382,28 @@ export default function Player(p: Props) {
       if (e.key === ' ' || e.key === 'k') { e.preventDefault(); v.paused ? v.play().catch(() => {}) : v.pause(); showControls(); }
       else if (e.key === 'ArrowRight') { if (!live) { v.currentTime += 10; setFlash('fwd'); setTimeout(() => setFlash(null), 400); showControls(); } }
       else if (e.key === 'ArrowLeft') { if (!live) { v.currentTime -= 10; setFlash('back'); setTimeout(() => setFlash(null), 400); showControls(); } }
+      else if (e.key === 'ArrowDown') {
+        /* live TV: up/down zap channels like a set-top box; otherwise volume */
+        if (live && p.onZap) { e.preventDefault(); p.onZap(-1); }
+        else v.volume = Math.max(0, v.volume - 0.1);
+      }
+      else if (e.key === 'ArrowUp') {
+        if (live && p.onZap) { e.preventDefault(); p.onZap(1); }
+        else v.volume = Math.min(1, v.volume + 0.1);
+      }
       else if (e.key === 'm' || e.key === 'M') { v.muted = !v.muted; setMuted(v.muted); showControls(); }
-      else if (e.key === 'ArrowDown') v.volume = Math.max(0, v.volume - 0.1);
-      else if (e.key === 'ArrowUp') v.volume = Math.min(1, v.volume + 0.1);
+      else if (e.key === 'c' || e.key === 'C') { toggleCC(); showControls(); }
       else if (e.key === 'Escape') {
         /* first Escape leaves fullscreen; only close the player when inline */
         const d = document as any;
-        if (!d.fullscreenElement && !d.webkitFullscreenElement) p.onClose();
+        if (!d.fullscreenElement && !d.webkitFullscreenElement) { if (settings) setSettings(false); else p.onClose(); }
       }
-      else if (e.key === 'f' || e.key === 'F') contRef.current?.requestFullscreen?.().catch(() => {});
+      else if (e.key === 'f' || e.key === 'F') toggleFullscreen();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, p.onClose]);
+  }, [live, p.onClose, p.onZap, settings]);
 
   /* ---------- actions ---------- */
   function togglePlay(e?: React.MouseEvent | React.TouchEvent) {
@@ -395,11 +442,41 @@ export default function Player(p: Props) {
   function setAudio(i: number) { setAudioTrack(i); if (hlsRef.current) hlsRef.current.audioTrack = i; }
   function setSub(i: number) {
     setSubTrack(i);
+    if (i >= 0) lastSub.current = i;
     save('subLang', (hlsRef.current?.subtitleTracks?.[i] && (hlsRef.current.subtitleTracks[i].lang || hlsRef.current.subtitleTracks[i].name)) || '');
     if (hlsRef.current) { hlsRef.current.subtitleDisplay = i >= 0; hlsRef.current.subtitleTrack = i; }
   }
+  /* CC button: flip between the last chosen track and off */
+  function toggleCC() {
+    const v = videoRef.current;
+    if (!v || !subTracks.length) return;
+    setSub(subTrack >= 0 ? -1 : (lastSub.current >= 0 ? lastSub.current : 0));
+  }
+  function toggleFullscreen() {
+    const d = document as any;
+    const el = contRef.current as any;
+    const v = videoRef.current as any;
+    setSettings(false);
+    showControls(true);
+    try {
+      if (d.fullscreenElement || d.webkitFullscreenElement) {
+        (d.exitFullscreen?.() ?? d.webkitExitFullscreen?.())?.catch?.(() => {});
+        (screen.orientation as any)?.unlock?.();
+      } else {
+        /* landscape lock where supported (Android/Chrome); iOS ignores it and
+           relies on the user rotating, native video fullscreen auto-rotates */
+        (screen.orientation as any)?.lock?.('landscape')?.catch?.(() => {});
+        let req = el?.requestFullscreen?.();
+        if (!req && el?.webkitRequestFullscreen) { el.webkitRequestFullscreen(); req = null; }
+        if (req?.catch) req.catch(() => {});
+        if (!el?.requestFullscreen && !el?.webkitRequestFullscreen) v?.webkitEnterFullscreen?.();
+      }
+    } catch {}
+  }
 
+  const lastSub = useRef(-1);
   const liked = p.isFav;
+  const hasSettings = !live || levels.length > 1 || audioTracks.length > 1 || subTracks.length > 0;
 
   return (
     <div ref={contRef} className="player-overlay flex flex-col md:flex-row player-root">
@@ -470,13 +547,20 @@ export default function Player(p: Props) {
                 {p.channel.groups?.slice(0, 2).join(' · ') || p.channel.group}
               </div>
             </div>
-            {airplay && <button onClick={toggleAirPlay} className="press p-2 text-white" title="AirPlay"><IconAirplay className="w-6 h-6" /></button>}
-            <button onClick={togglePip} className="press p-2 text-white" title="Picture in picture"><IconPip className="w-6 h-6" /></button>
-            <button onClick={(e) => { e.stopPropagation(); contRef.current?.requestFullscreen?.().catch(() => {}); }} className="press p-2 text-white" title="Fullscreen">
-              <span className="text-[15px]">⛶</span>
-            </button>
           </div>
         </div>
+
+        {/* live TV: channel up / down on the right edge */}
+        {live && p.onZap && (
+          <div className={`absolute right-2 top-1/2 -translate-y-1/2 flex flex-col gap-1.5 transition-opacity duration-200 ${controls && !error ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+            <button onClick={(e) => { e.stopPropagation(); p.onZap!(-1); }} className="press p-2.5 rounded-full bg-black/50 backdrop-blur text-white border border-white/10" title="Previous channel">
+              <IconChevron className="w-5 h-5 -rotate-90" />
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); p.onZap!(1); }} className="press p-2.5 rounded-full bg-black/50 backdrop-blur text-white border border-white/10" title="Next channel">
+              <IconChevron className="w-5 h-5 rotate-90" />
+            </button>
+          </div>
+        )}
 
         {/* center big play */}
         {!error && (
@@ -491,22 +575,22 @@ export default function Player(p: Props) {
         <div className={`absolute bottom-0 inset-x-0 transition-opacity duration-200 ${controls && !error ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pb-[max(8px,var(--safe-b,0px))] pt-10">
             {showSeek ? (
-              <div className="mb-1.5 flex items-center gap-2.5 text-[11px] text-white/85 font-mono">
+              <div className="mb-2 flex items-center gap-2.5 text-[11px] text-white/85 font-mono">
                 <span className="w-10 text-right">{fmtTime(time)}</span>
-                <div className="relative flex-1 h-5 flex items-center" role="presentation">
-                  <div className="absolute inset-x-0 h-1 rounded-full bg-white/20 overflow-hidden">
-                    <div className="absolute inset-y-0 bg-white/35 rounded-full" style={{ width: `${buffered / duration * 100}%` }} />
+                <div className="relative flex-1 h-6 flex items-center seek-zone" role="presentation">
+                  <div className="seek-track absolute inset-x-0 rounded-full bg-white/20 overflow-hidden">
+                    <div className="absolute inset-y-0 bg-white/30 rounded-full" style={{ width: `${buffered / duration * 100}%` }} />
                     <div className="absolute inset-y-0 bg-accent rounded-full" style={{ width: `${time / duration * 100}%` }} />
                   </div>
                   <input type="range" min={0} max={duration} step={0.5} value={time} onChange={(e) => seekTo(parseFloat(e.target.value))}
                     className="absolute inset-0 w-full opacity-0 cursor-pointer" aria-label="Seek" />
-                  <div className="absolute w-3.5 h-3.5 rounded-full bg-white shadow translate-x-[calc(-50%+var(--t))] pointer-events-none"
+                  <div className="absolute w-4 h-4 rounded-full bg-accent shadow-lg ring-2 ring-white/80 translate-x-[calc(-50%+var(--t))] pointer-events-none transition-transform"
                     style={{ left: `${time / duration * 100}%`, ['--t' as any]: 0 }} />
                 </div>
                 <span>{fmtTime(duration)}</span>
               </div>
             ) : live ? (
-              <div className="mb-1.5 flex items-center gap-2 px-1">
+              <div className="mb-2 flex items-center gap-2 px-1">
                 <div className="h-1 flex-1 rounded-full bg-white/15 overflow-hidden">
                   <div className="h-full bg-red-500/90 rounded-full" style={{ width: '100%' }} />
                 </div>
@@ -542,43 +626,68 @@ export default function Player(p: Props) {
                   }}
                   className="press w-16 accent-accent" />
               )}
+              <div className="flex-1" />
+              {subTracks.length > 0 && (
+                <button onClick={(e) => { e.stopPropagation(); toggleCC(); }} className={`press p-2.5 ${subTrack >= 0 ? 'text-accent' : 'text-white/90'}`} title="Subtitles (C)">
+                  <IconCC className="w-6 h-6" />
+                </button>
+              )}
+              {hasSettings && (
+                <button onClick={(e) => { e.stopPropagation(); setSettings((s) => !s); showControls(true); }} className={`press p-2.5 ${settings ? 'text-accent' : 'text-white/90'}`} title="Playback settings">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" className="w-6 h-6">
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1" />
+                  </svg>
+                </button>
+              )}
               <button onClick={(e) => { e.stopPropagation(); p.onToggleFav(); }} className="press p-2.5" title="Favourite">
                 <IconStar filled={liked} className={`w-6 h-6 ${liked ? 'text-accent' : ''}`} />
               </button>
               <button onClick={(e) => { e.stopPropagation(); p.onAddMv(); }} className="press p-2.5" title="Add to multiview"><IconPlus className="w-6 h-6" /></button>
-              <div className="flex-1" />
-              {!live && (
-                <div className="flex items-center gap-1">
-                  <select value={rate} onChange={(e) => setRate2(parseFloat(e.target.value))} onClick={(e) => e.stopPropagation()}
-                    className="press bg-white/10 rounded-lg px-2 py-1.5 text-[12px] font-semibold outline-none backdrop-blur" title="Speed">
-                    {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => <option key={r} value={r}>{r === 1 ? 'Normal' : `${r}×`}</option>)}
-                  </select>
-                  {levels.length > 1 && (
-                    <select value={curLevel} onChange={(e) => setLevel(parseInt(e.target.value, 10))} onClick={(e) => e.stopPropagation()}
-                      className="press bg-white/10 rounded-lg px-2 py-1.5 text-[12px] font-semibold outline-none backdrop-blur" title="Quality">
-                      <option value={-1}>Auto</option>
-                      {levels.map((l) => <option key={l.i} value={l.i}>{l.label}</option>)}
-                    </select>
-                  )}
-                  {audioTracks.length > 1 && (
-                    <select value={audioTrack} onChange={(e) => setAudio(parseInt(e.target.value, 10))} onClick={(e) => e.stopPropagation()}
-                      className="press bg-white/10 rounded-lg px-2 py-1.5 text-[12px] font-semibold outline-none backdrop-blur" title="Audio">
-                      {audioTracks.map((a) => <option key={a.i} value={a.i}>{a.label}</option>)}
-                    </select>
-                  )}
-                  {subTracks.length > 0 && (
-                    <select value={subTrack} onChange={(e) => setSub(parseInt(e.target.value, 10))} onClick={(e) => e.stopPropagation()}
-                      className="press bg-white/10 rounded-lg px-2 py-1.5 text-[12px] font-semibold outline-none backdrop-blur" title="Subtitles">
-                      <option value={-1}>Off</option>
-                      {subTracks.map((s) => <option key={s.i} value={s.i}>{s.label}</option>)}
-                    </select>
-                  )}
-                </div>
-              )}
-              <span className="hidden"><IconSpeed className="w-5 h-5" /></span>
+              {airplay && <button onClick={toggleAirPlay} className="press p-2.5 text-white" title="AirPlay"><IconAirplay className="w-6 h-6" /></button>}
+              <button onClick={togglePip} className="press p-2.5 text-white" title="Picture in picture"><IconPip className="w-6 h-6" /></button>
+              <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="press p-2.5 text-white" title="Fullscreen (F)">
+                {fs ? <IconFullscreenExit className="w-6 h-6" /> : <IconFullscreen className="w-6 h-6" />}
+              </button>
             </div>
           </div>
         </div>
+
+        {/* playback settings — Netflix-style panel above the control bar */}
+        {settings && !error && (
+          <div onClick={(e) => e.stopPropagation()}
+            className="absolute right-3 bottom-[86px] z-30 w-72 max-h-[56%] scroll-y ios-blur rounded-2xl border border-white/10 p-3 space-y-4 text-white shadow-2xl fade-in">
+            <div className="text-[12px] font-bold uppercase tracking-widest text-white/50 px-1">Playback settings</div>
+            {!live && (
+              <SettingsSection label="Speed">
+                {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
+                  <Pill key={r} active={rate === r} onClick={() => setRate2(r)}>{r === 1 ? 'Normal' : `${r}×`}</Pill>
+                ))}
+              </SettingsSection>
+            )}
+            {levels.length > 1 && (
+              <SettingsSection label="Quality">
+                <Pill active={curLevel === -1} onClick={() => setLevel(-1)}>Auto</Pill>
+                {levels.map((l) => <Pill key={l.i} active={curLevel === l.i} onClick={() => setLevel(l.i)}>{l.label}</Pill>)}
+              </SettingsSection>
+            )}
+            {audioTracks.length > 1 && (
+              <SettingsSection label="Audio">
+                {audioTracks.map((a) => <Pill key={a.i} active={audioTrack === a.i} onClick={() => setAudio(a.i)}>{a.label}</Pill>)}
+              </SettingsSection>
+            )}
+            <SettingsSection label="Subtitles">
+              {subTracks.length ? (
+                <>
+                  <Pill active={subTrack === -1} onClick={() => setSub(-1)}>Off</Pill>
+                  {subTracks.map((s) => <Pill key={s.i} active={subTrack === s.i} onClick={() => setSub(s.i)}>{s.label}</Pill>)}
+                </>
+              ) : (
+                <div className="text-[12px] text-white/45 px-1">No subtitle tracks in this stream</div>
+              )}
+            </SettingsSection>
+          </div>
+        )}
       </div>
 
       {/* INFO AREA (portrait) */}

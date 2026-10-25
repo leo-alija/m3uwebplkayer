@@ -1,6 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { M3UScanner, parseM3U } from './m3u';
 import { parseM3UWithProgress } from './m3u-client';
+
+const FIXTURE = readFileSync(new URL('./fixtures/popular-kids-iptv.m3u', import.meta.url), 'utf8');
 
 const SAMPLE = [
   '#EXTM3U x-tvg-url="http://epg.example/xmltv.xml"',
@@ -47,6 +50,77 @@ describe('M3UScanner vs parseM3U', () => {
   it('BOM + CRLF are stripped before scanning', () => {
     const bom = '\ufeff' + SAMPLE;
     expect(parseM3U(bom)).toEqual(parseM3U(SAMPLE));
+  });
+});
+
+describe('real-world fixture: popular-kids-iptv.m3u', () => {
+  const parsed = parseM3U(FIXTURE);
+
+  it('parses every entry with a name and an http(s) URL', () => {
+    expect(parsed.channels.length).toBeGreaterThan(300);
+    expect(FIXTURE.match(/#EXTINF/g)?.length).toBe(parsed.channels.length);
+    for (const c of parsed.channels) {
+      expect(c.name.trim()).not.toBe('');
+      expect(c.url).toMatch(/^https?:\/\//);
+    }
+  });
+
+  it('assigns unique ids and keeps group/logo/tvg metadata', () => {
+    expect(new Set(parsed.channels.map((c) => c.id)).size).toBe(parsed.channels.length);
+    expect(parsed.channels.some((c) => c.groups?.includes('Kids'))).toBe(true);
+    expect(parsed.channels.every((c) => c.tvgId)).toBe(true);
+    expect(parsed.channels.filter((c) => c.logo).length).toBe(parsed.channels.length - 1); /* one logo-less entry */
+    expect(parsed.epgUrl).toBeUndefined(); /* fixture header carries no x-tvg-url */
+  });
+
+  it('survives BOM + CRLF mangling unchanged', () => {
+    const mangled = '\ufeff' + FIXTURE.replace(/\n/g, '\r\n');
+    expect(parseM3U(mangled)).toEqual(parsed);
+  });
+});
+
+describe('malformed playlists', () => {
+  it('handles empty and non-M3U text', () => {
+    expect(parseM3U('')).toEqual({ channels: [] });
+    expect(parseM3U('not an m3u at all\njust text')).toEqual({ channels: [] });
+  });
+
+  it('ignores bare URLs that never follow an EXTINF', () => {
+    expect(parseM3U('#EXTM3U\nhttp://stream.example/live.m3u8').channels).toHaveLength(0);
+  });
+
+  it('does not leak attributes from an EXTINF whose URL never arrives', () => {
+    const { channels } = parseM3U(
+      [
+        '#EXTM3U',
+        '#EXTINF:-1 tvg-id="one" group-title="Ghost",No URL Follows',
+        '#EXTINF:-1 group-title="Real",Second',
+        'http://stream.example/2.m3u8',
+      ].join('\n'),
+    );
+    expect(channels).toHaveLength(1);
+    expect(channels[0].name).toBe('Second');
+    expect(channels[0].group).toBe('Real');
+    expect(channels[0].tvgId).toBeUndefined();
+  });
+
+  it('keeps text after the first unquoted comma as the display name', () => {
+    const { channels } = parseM3U('#EXTM3U\n#EXTINF:-1 tvg-id="x" group-title="G",Hello, World\nhttp://s.example/x.m3u8');
+    expect(channels[0].name).toBe('Hello, World');
+  });
+
+  it('does not throw on unterminated quotes or stray option lines', () => {
+    const text = [
+      '#EXTM3U',
+      '#EXTVLCOPT:http-user-agent=',
+      '#EXTINF:-1 tvg-name="Broken Group",Unbalanced',
+      'http://s.example/1.m3u8',
+    ].join('\n');
+    const { channels } = parseM3U(text);
+    expect(channels).toHaveLength(1);
+    /* the parser prefers tvg-name over the display name */
+    expect(channels[0].name).toBe('Broken Group');
+    expect(channels[0].headers).toBeUndefined(); /* empty option value is ignored */
   });
 });
 
