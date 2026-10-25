@@ -92,6 +92,7 @@ type Pending = {
   groups: string[];
   url: string;
   tvgId?: string;
+  tvgName?: string;
   explicitNumber?: number;
   headers: Record<string, string>;
   contentType: Channel['contentType'];
@@ -170,6 +171,7 @@ export function parseM3U(text: string): { channels: Channel[]; epgUrl?: string }
         groups,
         url: line,
         tvgId: attributes['tvg-id']?.trim() || undefined,
+        tvgName: attributes['tvg-name']?.trim() || undefined,
         explicitNumber: (() => {
           const v = (attributes['tvg-chno'] || attributes['channel-number'] || '').trim();
           const n = v ? parseInt(v, 10) : NaN;
@@ -204,7 +206,7 @@ export function parseM3U(text: string): { channels: Channel[]; epgUrl?: string }
     group: e.group,
     groups: e.groups,
     tvgId: e.tvgId,
-    tvgName: attributes['tvg-name'] || undefined,
+    tvgName: e.tvgName,
     channelNumber: e.explicitNumber != null ? e.explicitNumber : nextImplicit++,
     contentType: e.contentType,
     headers: Object.keys(e.headers).length ? e.headers : undefined,
