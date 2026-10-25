@@ -102,125 +102,142 @@ type Pending = {
   rank: number;
 };
 
-export function parseM3U(text: string): { channels: Channel[]; epgUrl?: string } {
-  text = stripBom(text);
-  const lines = text.split(/\r?\n/);
-  const entries: Pending[] = [];
-  let epgUrl: string | undefined;
-  let headerCatchup: Record<string, string> = {};
+/* Incremental M3U parse. The worker (and the main-thread fallback) feed lines
+   in chunks to report import progress without stalling the UI; parseM3U is the
+   one-shot wrapper with identical output. */
+export class M3UScanner {
+  private entries: Pending[] = [];
+  private epgUrl: string | undefined;
+  private headerCatchup: Record<string, string> = {};
+  private attributes: Record<string, string> = {};
+  private displayName: string | null = null;
+  private extGroup: string | null = null;
+  private headers: Record<string, string> = {};
+  private expectingUrl = false;
+  private firstLine = true;
 
-  let attributes: Record<string, string> = {};
-  let displayName: string | null = null;
-  let extGroup: string | null = null;
-  let headers: Record<string, string> = {};
-  let expectingUrl = false;
-
-  for (const raw of lines) {
+  pushLine(raw: string) {
+    if (this.firstLine) {
+      raw = stripBom(raw);
+      this.firstLine = false;
+    }
     const line = raw.trim();
-    if (!line) continue;
+    if (!line) return;
     if (line.toLowerCase().startsWith('#extm3u')) {
       const h = parseAttributes(line);
-      epgUrl = h['x-tvg-url'] || h['tvg-url'] || h['url-tvg'];
-      headerCatchup = h;
-      continue;
+      this.epgUrl = h['x-tvg-url'] || h['tvg-url'] || h['url-tvg'];
+      this.headerCatchup = h;
+      return;
     }
     if (line.toLowerCase().startsWith('#extinf:')) {
-      attributes = parseAttributes(line);
-      displayName = parseDisplayName(line);
-      headers = {};
-      expectingUrl = true;
-      continue;
+      this.attributes = parseAttributes(line);
+      this.displayName = parseDisplayName(line);
+      this.headers = {};
+      this.expectingUrl = true;
+      return;
     }
     if (line.toLowerCase().startsWith('#extgrp:')) {
-      extGroup = line.substring(line.indexOf(':') + 1).trim() || null;
-      continue;
+      this.extGroup = line.substring(line.indexOf(':') + 1).trim() || null;
+      return;
     }
     if (line.toLowerCase().startsWith('#extvlcopt:')) {
       const option = line.substring(line.indexOf(':') + 1);
       const key = option.substring(0, option.indexOf('=') >= 0 ? option.indexOf('=') : option.length).trim().toLowerCase();
       const value = option.includes('=') ? option.substring(option.indexOf('=') + 1).trim() : '';
       if (value) {
-        if (key === 'http-user-agent') headers['User-Agent'] = value;
-        if (key === 'http-referrer' || key === 'http-referer') headers['Referer'] = value;
-        if (key === 'http-origin') headers['Origin'] = value;
+        if (key === 'http-user-agent') this.headers['User-Agent'] = value;
+        if (key === 'http-referrer' || key === 'http-referer') this.headers['Referer'] = value;
+        if (key === 'http-origin') this.headers['Origin'] = value;
       }
-      continue;
+      return;
     }
     if (line.toLowerCase().startsWith('#exthttp:')) {
-      Object.assign(headers, parseJsonHeaders(line.substring(line.indexOf(':') + 1)));
-      continue;
+      Object.assign(this.headers, parseJsonHeaders(line.substring(line.indexOf(':') + 1)));
+      return;
     }
-    if (line.startsWith('#')) continue;
+    if (line.startsWith('#')) return;
 
-    if (expectingUrl) {
-      const name = (attributes['tvg-name'] && attributes['tvg-name'].trim()) || displayName || `Channel ${entries.length + 1}`;
-      const rawGroup = (attributes['group-title'] && attributes['group-title'].trim()) || extGroup || 'Uncategorized';
-      const groups = rawGroup.split(/[;|]+/).map((g) => g.trim()).filter(Boolean).length
-        ? rawGroup.split(/[;|]+/).map((g) => g.trim()).filter(Boolean)
-        : ['Uncategorized'];
-      const group = groups[0];
-      const catchupType = normaliseCatchupType((attributes['catchup'] || headerCatchup['catchup'] || '').trim().toLowerCase()) ;
-      const catchupDaysRaw = attributes['catchup-days'] || attributes['tvg-rec'] || headerCatchup['catchup-days'];
-      const catchupDays = catchupDaysRaw ? parseInt(catchupDaysRaw, 10) : null;
-      const catchupSource = (attributes['catchup-source'] || headerCatchup['catchup-source'] || '').trim() || null;
+    if (!this.expectingUrl) return;
+    const attributes = this.attributes;
+    const displayName = this.displayName;
+    const extGroup = this.extGroup;
+    const headers = this.headers;
+    const name = (attributes['tvg-name'] && attributes['tvg-name'].trim()) || displayName || `Channel ${this.entries.length + 1}`;
+    const rawGroup = (attributes['group-title'] && attributes['group-title'].trim()) || extGroup || 'Uncategorized';
+    const groups = rawGroup.split(/[;|]+/).map((g) => g.trim()).filter(Boolean).length
+      ? rawGroup.split(/[;|]+/).map((g) => g.trim()).filter(Boolean)
+      : ['Uncategorized'];
+    const group = groups[0];
+    const catchupType = normaliseCatchupType((attributes['catchup'] || this.headerCatchup['catchup'] || '').trim().toLowerCase()) ;
+    const catchupDaysRaw = attributes['catchup-days'] || attributes['tvg-rec'] || this.headerCatchup['catchup-days'];
+    const catchupDays = catchupDaysRaw ? parseInt(catchupDaysRaw, 10) : null;
+    const catchupSource = (attributes['catchup-source'] || this.headerCatchup['catchup-source'] || '').trim() || null;
 
-      entries.push({
-        name,
-        logo: attributes['tvg-logo']?.trim() || undefined,
-        group,
-        groups,
-        url: line,
-        tvgId: attributes['tvg-id']?.trim() || undefined,
-        tvgName: attributes['tvg-name']?.trim() || undefined,
-        explicitNumber: (() => {
-          const v = (attributes['tvg-chno'] || attributes['channel-number'] || '').trim();
-          const n = v ? parseInt(v, 10) : NaN;
-          return Number.isFinite(n) && n > 0 ? n : undefined;
-        })(),
-        headers: { ...headers },
-        contentType: detectContentType(line),
-        catchupType,
-        catchupDays: Number.isFinite(catchupDays as any) ? catchupDays : null,
-        catchupSource,
-        rank: languageRank(group, name),
-      });
-      attributes = {};
-      displayName = null;
-      extGroup = null;
-      headers = {};
-      expectingUrl = false;
-    }
+    this.entries.push({
+      name,
+      logo: attributes['tvg-logo']?.trim() || undefined,
+      group,
+      groups,
+      url: line,
+      tvgId: attributes['tvg-id']?.trim() || undefined,
+      tvgName: attributes['tvg-name']?.trim() || undefined,
+      explicitNumber: (() => {
+        const v = (attributes['tvg-chno'] || attributes['channel-number'] || '').trim();
+        const n = v ? parseInt(v, 10) : NaN;
+        return Number.isFinite(n) && n > 0 ? n : undefined;
+      })(),
+      headers: { ...headers },
+      contentType: detectContentType(line),
+      catchupType,
+      catchupDays: Number.isFinite(catchupDays as any) ? catchupDays : null,
+      catchupSource,
+      rank: languageRank(group, name),
+    });
+    this.attributes = {};
+    this.displayName = null;
+    this.extGroup = null;
+    this.headers = {};
+    this.expectingUrl = false;
   }
 
-  if (entries.length === 0) return { channels: [], epgUrl };
+  finish(): { channels: Channel[]; epgUrl?: string } {
+    const entries = this.entries;
+    if (entries.length === 0) return { channels: [], epgUrl: this.epgUrl };
 
-  const ordered = [...entries].sort((a, b) => a.rank - b.rank);
-  // Math.max(...arr) overflows the call stack on large playlists (URL imports can be 100k+ entries)
-  let highestExplicit = 0;
-  for (const e of entries) {
-    if (e.explicitNumber != null && e.explicitNumber > highestExplicit) highestExplicit = e.explicitNumber;
+    const ordered = [...entries].sort((a, b) => a.rank - b.rank);
+    // Math.max(...arr) overflows the call stack on large playlists (URL imports can be 100k+ entries)
+    let highestExplicit = 0;
+    for (const e of entries) {
+      if (e.explicitNumber != null && e.explicitNumber > highestExplicit) highestExplicit = e.explicitNumber;
+    }
+    let nextImplicit = highestExplicit + 1;
+
+    const channels: Channel[] = ordered.map((e, index) => ({
+      id: `ch_${index + 1}`,
+      name: e.name,
+      url: e.url,
+      logo: e.logo,
+      group: e.group,
+      groups: e.groups,
+      tvgId: e.tvgId,
+      tvgName: e.tvgName,
+      channelNumber: e.explicitNumber != null ? e.explicitNumber : nextImplicit++,
+      contentType: e.contentType,
+      headers: Object.keys(e.headers).length ? e.headers : undefined,
+      catchupType: e.catchupType,
+      catchupDays: e.catchupDays,
+      catchupSource: e.catchupSource,
+      qualityTag: extractQualityTag(e.name),
+    }));
+
+    return { channels, epgUrl: this.epgUrl };
   }
-  let nextImplicit = highestExplicit + 1;
+}
 
-  const channels: Channel[] = ordered.map((e, index) => ({
-    id: `ch_${index + 1}`,
-    name: e.name,
-    url: e.url,
-    logo: e.logo,
-    group: e.group,
-    groups: e.groups,
-    tvgId: e.tvgId,
-    tvgName: e.tvgName,
-    channelNumber: e.explicitNumber != null ? e.explicitNumber : nextImplicit++,
-    contentType: e.contentType,
-    headers: Object.keys(e.headers).length ? e.headers : undefined,
-    catchupType: e.catchupType,
-    catchupDays: e.catchupDays,
-    catchupSource: e.catchupSource,
-    qualityTag: extractQualityTag(e.name),
-  }));
-
-  return { channels, epgUrl };
+export function parseM3U(text: string): { channels: Channel[]; epgUrl?: string } {
+  const scanner = new M3UScanner();
+  for (const raw of text.split(/\r?\n/)) scanner.pushLine(raw);
+  return scanner.finish();
 }
 
 export function buildXtreamM3uUrl(host: string, user: string, pass: string, output = 'ts') {

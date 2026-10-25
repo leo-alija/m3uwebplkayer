@@ -1,13 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Channel, Playlist } from '@/lib/types';
+import { Channel, ImportProgress, Playlist } from '@/lib/types';
 import { Sheet, Button, IconChevron, GroupRow, Row, IconTrash } from './ui';
+import { ImportProgressBar } from './sheets';
 import { getDownloadIndex, removeDownload, fmtBytes, DownloadInfo, storageStatus } from '@/lib/downloads';
 
 export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hiddenCount, tmdbKey, setTmdbKey, status,
   hideGroup, renameGroup, reorderGroup, unhideAll, moveToGroup, allChannels,
-  onOpenImport, onOpenProfiles, onExportData, onImportData, onClearPlaylist, isStandalone, playbackCount, mvCount }: {
+  onOpenImport, onOpenProfiles, onExportData, onImportData, onClearPlaylist, isStandalone, playbackCount, mvCount,
+  canRefresh, refreshing, refreshProgress, onRefreshPlaylist }: {
   open: boolean; onClose: () => void;
   playlist: Playlist | null;
   groups: string[]; allGroups: string[]; hiddenCount: number;
@@ -23,6 +25,8 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
   onExportData: () => void; onImportData: (f: File) => void;
   onClearPlaylist: () => void;
   isStandalone: boolean; playbackCount: number; mvCount: number;
+  canRefresh: boolean; refreshing: boolean; refreshProgress: ImportProgress | null;
+  onRefreshPlaylist: () => void;
 }) {
   const [moveId, setMoveId] = useState('');
   const [dl, setDl] = useState<DownloadInfo[]>([]);
@@ -43,11 +47,25 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
               <span>Add / replace playlist</span><IconChevron className="w-4 h-4" />
             </button>
           </Row>
+          {playlist && canRefresh && (
+            <Row className="py-2">
+              <button onClick={onRefreshPlaylist} disabled={refreshing}
+                className="press flex-1 flex items-center justify-between text-[16px] text-link disabled:opacity-40">
+                <span>{refreshing ? 'Refreshing…' : 'Refresh playlist'}</span><IconChevron className="w-4 h-4" />
+              </button>
+            </Row>
+          )}
+          {playlist && canRefresh && (
+            <div className="px-4 pb-2 text-[12px] text-white/35 leading-relaxed">
+              Re-downloads the same URL or Xtream login and rebuilds every category — favourites, groups and history stay as they are.
+            </div>
+          )}
           {playlist && (
             <Row className="py-2">
               <button onClick={onClearPlaylist} className="press flex-1 text-[16px] text-red-400">Remove playlist</button>
             </Row>
           )}
+          {refreshing && <div className="pb-3"><ImportProgressBar progress={refreshProgress} /></div>}
         </GroupRow>
 
         <GroupRow title="Favourites & history">

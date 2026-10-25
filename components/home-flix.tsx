@@ -133,16 +133,18 @@ export function Shelf({ title, children, onSeeAll }: { title: string; children: 
   );
 }
 
-/* Live channel tile (Netflix "TV" card): 16:9 with logo centre */
+/* Live channel tile (Netflix "TV" card): 16:9 with logo centre, name
+   fallback when the channel ships no logo or the logo fails to load */
 export function LiveTile({ ch, onClick }: { ch: Channel; onClick: () => void }) {
+  const [logoFailed, setLogoFailed] = useState(false);
   return (
     <button onClick={onClick} className="press text-left" style={{ width: 150 }}>
       <div className="relative rounded-xl overflow-hidden bg-gradient-to-br from-raise to-deck flex items-center justify-center" style={{ aspectRatio: '16/10' }}>
-        {ch.logo ? (
-          <img src={ch.logo} alt="" loading="lazy" onError={(e) => (e.currentTarget.style.display = 'none')}
+        {ch.logo && !logoFailed ? (
+          <img src={ch.logo} alt="" loading="lazy" onError={() => setLogoFailed(true)}
             className="max-w-[62%] max-h-[62%] object-contain drop-shadow-lg" />
         ) : (
-          <span className="text-[13px] font-bold text-white/40 px-3 text-center leading-tight">{ch.name}</span>
+          <span className="text-[13px] font-bold text-white/40 px-3 text-center leading-tight line-clamp-3">{ch.name}</span>
         )}
         <div className="absolute inset-0 ring-1 ring-inset ring-white/5 rounded-xl" />
       </div>

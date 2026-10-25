@@ -1,16 +1,16 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Channel, Playlist, Profile, SeriesFolder } from '@/lib/types';
+import { Channel, Playlist, Profile, SeriesFolder, ImportProgress } from '@/lib/types';
 import { Sheet, Button, Chip, GroupRow, Row, IconChevron, IconClose, IconStar, IconPlayCircle, Poster, IconTrash } from './ui';
 
 /* ================= Import ================= */
 
-export function ImportSheet({ open, onClose, url, setUrl, xtream, setXtream, importing, error, onUrl, onFile, onXtream }: {
+export function ImportSheet({ open, onClose, url, setUrl, xtream, setXtream, importing, error, progress, onUrl, onFile, onXtream }: {
   open: boolean; onClose: () => void;
   url: string; setUrl: (v: string) => void;
   xtream: { host: string; user: string; pass: string }; setXtream: (v: any) => void;
-  importing: boolean; error: string;
+  importing: boolean; error: string; progress: ImportProgress | null;
   onUrl: () => void; onFile: (f: File) => void; onXtream: () => void;
 }) {
   return (
@@ -48,12 +48,45 @@ export function ImportSheet({ open, onClose, url, setUrl, xtream, setXtream, imp
         </GroupRow>
 
         {error && <div className="mx-4 text-red-400 text-[14px]">{error}</div>}
-        {importing && <div className="mx-4 text-white/50 text-[13px]">Fetching the playlist. Large lists can take a while…</div>}
+        {importing && <ImportProgressBar progress={progress} />}
         <div className="text-center text-[12px] text-white/35 px-6 leading-relaxed">
           Playlists are yours to supply — nothing is bundled, hosted or recommended. Import can take a moment for large playlists.
         </div>
       </div>
     </Sheet>
+  );
+}
+
+/* Download → parse → save progress line, reused by the Settings refresh flow */
+export function ImportProgressBar({ progress }: { progress: ImportProgress | null }) {
+  if (!progress) {
+    return <div className="mx-4 text-white/50 text-[13px]">Fetching the playlist. Large lists can take a while…</div>;
+  }
+  let label = 'Working…';
+  let pct: number | null = null;
+  if (progress.phase === 'download') {
+    label = 'Downloading playlist';
+    if (progress.received != null) {
+      const mb = (progress.received / 1024 / 1024).toFixed(1);
+      label = `Downloading playlist — ${mb} MB`;
+      if (progress.contentTotal) pct = Math.min(100, (progress.received / progress.contentTotal) * 100);
+    }
+  } else if (progress.phase === 'parse') {
+    const { lines = 0, total = 0 } = progress;
+    label = total ? `Parsing ${Math.min(lines, total).toLocaleString()} of ${total.toLocaleString()} lines` : 'Parsing playlist';
+    if (total) pct = Math.min(100, (lines / total) * 100);
+  } else if (progress.phase === 'save') {
+    label = 'Saving playlist';
+    pct = 100;
+  }
+  return (
+    <div className="mx-4 space-y-1.5" aria-live="polite">
+      <div className="text-[13px] text-white/60">{label}…</div>
+      <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+        <div className={`h-full rounded-full bg-accent transition-[width] duration-200 ${pct == null ? 'w-1/3 animate-pulse' : ''}`}
+          style={pct != null ? { width: `${pct}%` } : undefined} />
+      </div>
+    </div>
   );
 }
 

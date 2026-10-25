@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import { parseM3U, buildXtreamM3uUrl } from '@/lib/m3u';
+import { buildXtreamM3uUrl } from '@/lib/m3u';
+import { parseM3UWithProgress } from '@/lib/m3u-client';
 import { buildCatchupUrl } from '@/lib/catchup';
 import { parseXMLTV, nowProgram, parseXmltvDate } from '@/lib/epg';
 import { load, save, loadPlaylist, savePlaylist, clearPlaylist as clearPlaylistStore } from '@/lib/storage';
@@ -8,7 +9,7 @@ import { groupIntoFolders } from '@/lib/series';
 import { getTmdb } from '@/lib/tmdb';
 import { downloadVideo, canDownload, getDownloadIndex } from '@/lib/downloads';
 import { mvCap } from '@/lib/env';
-import { Channel, Playlist, Program, SeriesFolder, SeriesEpisode, Profile } from '@/lib/types';
+import { Channel, Playlist, Program, SeriesFolder, SeriesEpisode, Profile, ImportProgress } from '@/lib/types';
 import Player from '@/components/player';
 import Multiview from '@/components/multiview';
 import DetailSheet from '@/components/detail';
@@ -42,7 +43,10 @@ export default function Home() {
   const [importUrl, setImportUrl] = useState('');
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState('');
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [xtream, setXtream] = useState({ host: '', user: '', pass: '' });
+  const [canRefresh, setCanRefresh] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [selected, setSelected] = useState<{ channel: Channel; resume: number; catchup?: boolean } | null>(null);
   const [detail, setDetail] = useState<{ kind: 'movie' | 'series'; title: string; folder?: SeriesFolder; channel?: Channel } | null>(null);
@@ -85,6 +89,7 @@ export default function Home() {
     setActiveProfileId(load('activeProfileId', 'default'));
     setOverrides(load('groupOverrides', {}));
     setTmdbKey(load('tmdbKey', ''));
+    setCanRefresh(!!load('lastImport', null));
     const standalone = (window.navigator as any).standalone === true || window.matchMedia('(display-mode: standalone)').matches;
     setIsStandalone(standalone);
     loadPlaylist<Playlist>().then((pl) => {
@@ -137,13 +142,27 @@ export default function Home() {
     } catch { /* feed may be down; guide stays empty */ }
   }
 
-  async function fetchText(url: string) {
+  async function fetchText(url: string, onBytes?: (received: number, total: number) => void) {
     const res = await fetch(`/api/fetch?url=${encodeURIComponent(url)}`);
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
       throw new Error(j.error || 'fetch failed');
     }
-    return await res.text();
+    if (!onBytes || !res.body) return await res.text();
+    /* stream the download so big playlists show real progress */
+    const contentTotal = Number(res.headers.get('content-length')) || 0;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let received = 0;
+    let out = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      out += decoder.decode(value, { stream: true });
+      onBytes(received, contentTotal);
+    }
+    return out + decoder.decode();
   }
 
   /* ---------- import ---------- */
@@ -152,14 +171,17 @@ export default function Home() {
       ? { ...c, group: overrides[c.id], groups: [overrides[c.id]] }
       : c)), [overrides]);
 
-  function importPlaylistText(text: string, name: string, epgUrl?: string) {
-    const { channels, epgUrl: parsedEpg } = parseM3U(text);
-    const chs = applyOverrides(channels);
-    const pl: Playlist = { name, channels: chs, epgUrl: epgUrl || parsedEpg, importedAt: Date.now() };
+  async function importPlaylistText(text: string, name: string, epgUrl?: string) {
+    setImportProgress({ phase: 'parse', lines: 0, total: 0 });
+    const parsed = await parseM3UWithProgress(text, (p) => setImportProgress({ phase: 'parse', ...p }));
+    const chs = applyOverrides(parsed.channels);
+    setImportProgress({ phase: 'save' });
+    const pl: Playlist = { name, channels: chs, epgUrl: epgUrl || parsed.epgUrl, importedAt: Date.now() };
     setPlaylist(pl);
-    savePlaylist(pl);
+    await savePlaylist(pl);
     setShowImport(false);
     setTab('home');
+    setImportProgress(null);
     flash(`Loaded ${chs.length.toLocaleString()} items`);
     if (pl.epgUrl) loadEpg(pl.epgUrl);
   }
@@ -167,18 +189,25 @@ export default function Home() {
   async function importFromUrl() {
     setImporting(true); setImportError('');
     try {
-      const text = await fetchText(importUrl.trim());
-      importPlaylistText(text, importUrl.trim());
-    } catch (e: any) { setImportError(e?.message || 'Import failed — check the URL'); }
+      const url = importUrl.trim();
+      const text = await fetchText(url, (received, contentTotal) => setImportProgress({ phase: 'download', received, contentTotal }));
+      await importPlaylistText(text, url);
+      save('lastImport', { kind: 'url', url });
+      setCanRefresh(true);
+    } catch (e: any) { setImportError(e?.message || 'Import failed — check the URL'); setImportProgress(null); }
     finally { setImporting(false); }
   }
 
-  function importFromFile(file: File) {
+  async function importFromFile(file: File) {
     setImporting(true); setImportError('');
     const reader = new FileReader();
-    reader.onload = () => {
-      try { importPlaylistText(String(reader.result || ''), file.name); }
-      catch (e: any) { setImportError(e?.message || 'Import failed'); }
+    reader.onload = async () => {
+      try {
+        await importPlaylistText(String(reader.result || ''), file.name);
+        save('lastImport', { kind: 'file', name: file.name });
+        setCanRefresh(false); // file sources can't be re-fetched
+      }
+      catch (e: any) { setImportError(e?.message || 'Import failed'); setImportProgress(null); }
       finally { setImporting(false); }
     };
     reader.readAsText(file);
@@ -187,12 +216,43 @@ export default function Home() {
   async function importXtream() {
     setImporting(true); setImportError('');
     try {
-      const url = buildXtreamM3uUrl(xtream.host.trim(), xtream.user, xtream.pass);
-      const text = await fetchText(url);
-      const epgUrl = `${xtream.host.trim().replace(/\/+$/, '')}/xmltv.php?username=${encodeURIComponent(xtream.user)}&password=${encodeURIComponent(xtream.pass)}`;
-      importPlaylistText(text, xtream.host.trim(), epgUrl);
-    } catch (e: any) { setImportError(e?.message || 'Import failed — check the login'); }
+      const host = xtream.host.trim();
+      const url = buildXtreamM3uUrl(host, xtream.user, xtream.pass);
+      const text = await fetchText(url, (received, contentTotal) => setImportProgress({ phase: 'download', received, contentTotal }));
+      const epgUrl = `${host.replace(/\/+$/, '')}/xmltv.php?username=${encodeURIComponent(xtream.user)}&password=${encodeURIComponent(xtream.pass)}`;
+      await importPlaylistText(text, host, epgUrl);
+      save('lastImport', { kind: 'xtream', host, user: xtream.user, pass: xtream.pass });
+      setCanRefresh(true);
+    } catch (e: any) { setImportError(e?.message || 'Import failed — check the login'); setImportProgress(null); }
     finally { setImporting(false); }
+  }
+
+  /* Re-fetch the last URL/Xtream source with the same pipeline as a fresh
+     import (progress UI included). Channel ids are index-derived, so a
+     refresh of an unchanged provider keeps favourites intact. */
+  async function refreshPlaylist() {
+    const li = load<any>('lastImport', null);
+    if (!li || refreshing) return;
+    setRefreshing(true);
+    try {
+      if (li.kind === 'url') {
+        const text = await fetchText(li.url, (received, contentTotal) => setImportProgress({ phase: 'download', received, contentTotal }));
+        await importPlaylistText(text, li.url);
+      } else if (li.kind === 'xtream') {
+        const host = String(li.host || '');
+        const url = buildXtreamM3uUrl(host, li.user, li.pass);
+        const text = await fetchText(url, (received, contentTotal) => setImportProgress({ phase: 'download', received, contentTotal }));
+        const epgUrl = `${host.replace(/\/+$/, '')}/xmltv.php?username=${encodeURIComponent(li.user)}&password=${encodeURIComponent(li.pass)}`;
+        await importPlaylistText(text, host, epgUrl);
+      } else {
+        flash('File imports can’t be refreshed — re-upload the file');
+        return;
+      }
+      flash('Playlist refreshed');
+    } catch (e: any) {
+      setImportProgress(null);
+      flash(e?.message || 'Refresh failed — check the connection');
+    } finally { setRefreshing(false); }
   }
 
   /* ---------- backup ---------- */
@@ -708,7 +768,7 @@ export default function Home() {
       <ImportSheet open={showImport} onClose={() => setShowImport(false)}
         url={importUrl} setUrl={setImportUrl}
         xtream={xtream} setXtream={setXtream}
-        importing={importing} error={importError}
+        importing={importing} error={importError} progress={importProgress}
         onUrl={importFromUrl} onFile={importFromFile} onXtream={importXtream} />
 
       {detail && (
@@ -729,6 +789,8 @@ export default function Home() {
       <SettingsSheet open={showSettings} onClose={() => setShowSettings(false)}
         playlist={playlist} groups={groups} allGroups={allGroups} hiddenCount={hiddenGroups.length}
         tmdbKey={tmdbKey} setTmdbKey={setTmdbKey} status={status}
+        canRefresh={canRefresh} refreshing={refreshing} refreshProgress={importProgress}
+        onRefreshPlaylist={refreshPlaylist}
         hideGroup={(g) => { updateProfile({ hiddenGroups: [...hiddenGroups, g] }); flash(`Hidden “${g}”`); }}
         renameGroup={(g, n) => updateProfile({ renamed: { ...activeProfile.renamed, [g]: n } })}
         reorderGroup={(g, dir) => {

@@ -31,7 +31,7 @@ Repo unchanged since the "build plan" commit — PLAN.md phases 0–5 are all st
 | 5 ✅ | Catch-up engine `lib/catchup.ts`: URL builder per provider mode (parser already reads catchup tags), playback route, "catch-up from EPG" entry point | playback starts from the EPG entry |
 | 6 ✅ | Netflix set: watchlist shelf, Top 10 shelf, More Like This, design tokens (phase out 50+ hardcoded hexes to CSS vars) | shelves live, plugin-free tokens |
 | 7 ✅ | iOS stack: hls.js via ManagedMediaSource (17.1+, keep native fallback < 17.1), Media Session lock-screen, multiview device tile caps, offline-download quota guard (eviction reminder), PWA update toast | feature flag + device matrix notes |
-| 8 | Perf/scale: worker M3U parse + import progress UI (50k entries no longer stall main thread); Xtream category refresh UX; logo fallback for logo-less channels | import progress w/ 50k fixture |
+| 8 ✅ | Perf/scale: worker M3U parse + import progress UI (50k entries no longer stall main thread); Xtream category refresh UX; logo fallback for logo-less channels | import progress w/ 50k fixture |
 | 9 | Tests: Vitest on m3u/series/epg/catchup, fixture `../popular-kids-iptv.m3u` + BOM/CRLF/malformed cases | suite green in CI |
 | 10 | Owner manual QA (not automatable): Safari script from Stage 1 output — import URL/file/Xtream, keypad zapping, catch-up, MMS quality menu, multiview caps, lock-screen controls | checklist signed off |
 
@@ -46,7 +46,14 @@ Playback engine per device (`lib/env.ts`, shared by player and multiview):
 | Desktop Safari | hls.js (quality/audio menus work) |
 | Chrome/Firefox/Edge | hls.js via MSE |
 
-Feature flag: set localStorage key `mmsHls` to `off` to force native HLS on iOS regardless of version. Multiview caps: 2 tiles on phones, 6 on iPad/desktop. Downloads refuse to start past 90% storage quota; persistence is requested on first download and the eviction reminder lives in Settings → Backup. Stage 7 also carried player fixes: engine-switch attach hygiene on the reused `<video>`, resume seek when metadata already loaded, volume slider restored on desktop Safari, Escape no longer closes the player while fullscreen, wake lock re-acquires after screen wake.
+Feature flag: set localStorage key `mmsHls` to `off` to force native HLS on iOS regardless of version. Multiview caps: 2 tiles on phones, 6 on iPad/desktop. Downloads refuse to start past 90% storage quota; persistence is requested on the first download and the eviction reminder lives in Settings → Backup. Stage 7 also carried player fixes: engine-switch attach hygiene on the reused `<video>`, resume seek when metadata already loaded, volume slider restored on desktop Safari, Escape no longer closes the player while fullscreen, wake lock re-acquires after screen wake.
+
+### Stage 8 notes
+
+- Import no longer times out on big playlists: `/api/fetch` text proxy now allows 64 MB (was 10 MB) and its read timeout is idle-based — 20 s with no bytes, 120 s overall — instead of a hard 15 s cap that cut off slow providers mid-download.
+- M3U parsing runs in a module worker (`lib/m3u-worker.ts`) driven by the incremental `M3UScanner` in `lib/m3u.ts`; browsers without worker support fall back to chunked main-thread parsing with yields. Progress (download bytes → lines parsed → saving) renders in the Import sheet and during refresh.
+- Xtream refresh: the last import source (URL or Xtream login) is remembered in localStorage (`lastImport`) and Settings → Playlist gains "Refresh playlist", re-running the same pipeline with progress. Channel ids are index-derived, so refreshing an unchanged provider keeps favourites/history intact; file imports can't be refreshed.
+- Logo fallback: `Poster` renders a deterministic initials tile (SVG, hue hashed from the name) for logo-less channels or failed loads; `LiveTile` falls back to the channel name when its logo 404s.
 
 ## Environment
 

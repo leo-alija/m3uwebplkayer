@@ -30,6 +30,12 @@ export type Playlist = {
   importedAt: number;
 };
 
+export type ImportProgress = {
+  phase: 'download' | 'parse' | 'save';
+  lines?: number; total?: number;           // parse phase
+  received?: number; contentTotal?: number; // download phase (bytes)
+};
+
 export type SeriesEpisode = {
   channel: Channel;
   seasonNumber: number;

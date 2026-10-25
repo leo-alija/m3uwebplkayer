@@ -207,16 +207,46 @@ export function Chip({ label, active, onClick }: { label: string; active?: boole
   );
 }
 
+function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function initialsOf(label: string): string {
+  const words = label.trim().split(/[\s\-–—_.]+/).filter(Boolean);
+  if (!words.length) return '';
+  const first = words[0].replace(/[^A-Za-z0-9]/g, '');
+  const second = words.length > 1 ? words[words.length - 1].replace(/[^A-Za-z0-9]/g, '') : '';
+  return ((first[0] || '') + (second[0] || '')).toUpperCase() || label[0].toUpperCase();
+}
+
 export function Poster({ src, label, className }: { src?: string; label?: string; className?: string }) {
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const has = !!src && !failed;
+  /* Logo-less channels get a deterministic initials tile: same name → same
+     colour, so shelves stay recognisable across reloads. SVG text scales with
+     the tile, from 40px list rows to full posters. */
+  const hue = label ? hashString(label) % 360 : 0;
   return (
     <div className={`relative overflow-hidden ${className || ''}`}>
       {!has && (
-        <div className="absolute inset-0 bg-gradient-to-br from-haze to-card flex items-end p-2">
-          {label && <div className="text-white/60 text-[11px] font-semibold leading-tight line-clamp-3">{label}</div>}
-        </div>
+        <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" className="absolute inset-0 w-full h-full" aria-hidden>
+          <defs>
+            <linearGradient id={`pf-${hue}`} x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stopColor={`hsl(${hue} 32% 26%)`} />
+              <stop offset="100%" stopColor={`hsl(${(hue + 40) % 360} 32% 13%)`} />
+            </linearGradient>
+          </defs>
+          <rect width="100" height="100" fill={`url(#pf-${hue})`} />
+          {label && initialsOf(label) && (
+            <text x="50" y="52" textAnchor="middle" dominantBaseline="central"
+              fill="rgba(255,255,255,0.75)" fontWeight="800" fontFamily="inherit" fontSize="40">
+              {initialsOf(label)}
+            </text>
+          )}
+        </svg>
       )}
       {has && (
         <img src={src} alt="" loading="lazy" draggable={false}
