@@ -7,6 +7,7 @@ import { load, save, loadPlaylist, savePlaylist, clearPlaylist as clearPlaylistS
 import { groupIntoFolders } from '@/lib/series';
 import { getTmdb } from '@/lib/tmdb';
 import { downloadVideo, canDownload, getDownloadIndex } from '@/lib/downloads';
+import { mvCap } from '@/lib/env';
 import { Channel, Playlist, Program, SeriesFolder, SeriesEpisode, Profile } from '@/lib/types';
 import Player from '@/components/player';
 import Multiview from '@/components/multiview';
@@ -60,6 +61,7 @@ export default function Home() {
   const [tmdbKey, setTmdbKey] = useState('');
   const [meta, setMeta] = useState<Record<string, any>>({});
   const [status, setStatus] = useState('');
+  const [swUpdate, setSwUpdate] = useState(false);
   const [showInstallHint, setShowInstallHint] = useState(false);
   const [isStandalone, setIsStandalone] = useState(true);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -94,7 +96,18 @@ export default function Home() {
         setShowImport(true);
       }
     });
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+    /* PWA update detection: when a new service worker finishes installing
+       while we have one controlling the page, offer a reload */
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').then((reg) => {
+        reg.addEventListener('updatefound', () => {
+          const installing = reg.installing;
+          installing?.addEventListener('statechange', () => {
+            if (installing.state === 'installed' && navigator.serviceWorker.controller) setSwUpdate(true);
+          });
+        });
+      }).catch(() => {});
+    }
   }, []);
 
   useEffect(() => { save('profiles', profiles); }, [profiles]);
@@ -270,9 +283,16 @@ export default function Home() {
   }
 
   function addToMv(ch: Channel) {
-    setMv((prev) => (prev.find((x) => x.id === ch.id) ? prev : [...prev, ch].slice(0, 6)));
     setSelected(null);
     setShowMv(true);
+    if (mv.find((x) => x.id === ch.id)) return;
+    const cap = mvCap();
+    if (mv.length >= cap) {
+      /* device-class cap: phones decode 2 tiles fine, 6 is for iPad/desktop */
+      flash(`Multiview is capped at ${cap} tiles on this device`);
+      return;
+    }
+    setMv((prev) => [...prev, ch]);
   }
 
   /* ---------- detail / metadata ---------- */
@@ -747,6 +767,15 @@ export default function Home() {
           onClose={() => setShowSearch(false)} onPlayChannel={(c) => { setShowSearch(false); selectChannel(c); }}
           onOpenSeries={(f) => { setShowSearch(false); openDetail('series', f.name, { folder: f }); }}
           onOpenMovie={(c) => { setShowSearch(false); openDetail('movie', c.name, { channel: c }); }} />
+      )}
+
+      {swUpdate && (
+        <div className="fixed top-[calc(12px+var(--safe-t,0px))] inset-x-0 z-50 flex justify-center pointer-events-auto">
+          <div className="bg-accent text-black text-[13px] font-semibold px-4 py-2 rounded-full shadow-xl flex items-center gap-3">
+            <span>New version available</span>
+            <button onClick={() => location.reload()} className="press underline underline-offset-2">Reload</button>
+          </div>
+        </div>
       )}
 
       {status && (

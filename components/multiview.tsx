@@ -1,11 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Hls from 'hls.js';
+import type HlsJs from 'hls.js';
 import { Channel } from '@/lib/types';
 import { IconClose } from './ui';
-
-import { NATIVE_HLS } from '@/lib/env';
+import { isIOS, iosVersion, supportsMms, mmsEnabled, preferHlsJs } from '@/lib/env';
 
 function MVTile({ ch, onExpand, onRemove, solo, onSolo, twoCol }: { ch: Channel; onExpand: () => void; onRemove: () => void; solo: boolean; onSolo: () => void; twoCol: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
@@ -14,22 +13,30 @@ function MVTile({ ch, onExpand, onRemove, solo, onSolo, twoCol }: { ch: Channel;
   useEffect(() => {
     const video = ref.current;
     if (!video) return;
-    let hls: Hls | null = null;
+    let hls: HlsJs | null = null;
+    let cancelled = false;
     const url = ch.url;
-    if (/m3u8/.test(url)) {
-      if (NATIVE_HLS || !Hls.isSupported()) {
-        video.src = url;
+    (async () => {
+      /* same engine choice as the player: native HLS below iOS 17.1, hls.js (via
+         MMS there) elsewhere — with a native fallback if hls.js can't attach */
+      if (/m3u8/.test(url) && preferHlsJs(isIOS, iosVersion(), supportsMms(), mmsEnabled())) {
+        const Hls = (await import('hls.js')).default;
+        if (cancelled) return;
+        if (Hls.isSupported()) {
+          if (video.src) { video.removeAttribute('src'); video.load(); }
+          hls = new Hls({ enableWorker: true });
+          hls.loadSource(url);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) setFailed(true); });
+        } else {
+          video.src = url;
+        }
       } else {
-        hls = new Hls({ enableWorker: true });
-        hls.loadSource(url);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.ERROR, (_e, d) => { if (d.fatal) setFailed(true); });
+        video.src = url;
       }
-    } else {
-      video.src = url;
-    }
-    video.play().catch(() => {});
-    return () => { if (hls) hls.destroy(); };
+      video.play().catch(() => {});
+    })();
+    return () => { cancelled = true; if (hls) hls.destroy(); };
   }, [ch.url]);
 
   return (

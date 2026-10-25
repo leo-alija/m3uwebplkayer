@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import type HlsJs from 'hls.js';
 import { Channel, Program, SeriesEpisode } from '@/lib/types';
 import { load, save } from '@/lib/storage';
-import { NATIVE_HLS } from '@/lib/env';
+import { isIOS, iosVersion, supportsMms, mmsEnabled, preferHlsJs } from '@/lib/env';
+import { attachMediaSession } from '@/lib/media-session';
 import { canDownload, isDownloaded, getDownloadBlob } from '@/lib/downloads';
 import { IconClose, IconStar, IconPip, IconAirplay, IconPlus, IconPlayCircle, IconPauseCircle, IconSpeed } from './ui';
 
@@ -23,7 +24,13 @@ type Props = {
   onPlayEpisode: (ep: SeriesEpisode) => void;
 };
 
-const isIOS = NATIVE_HLS;
+/* hls.js vs native HLS engine choice: on iOS < 17.1 there is no
+   ManagedMediaSource, so the video element's native HLS is the only option;
+   everywhere else (incl. iOS 17.1+ and desktop Safari) hls.js takes over so
+   the quality/audio/subtitle menus work. */
+function wantHlsJs() {
+  return preferHlsJs(isIOS, iosVersion(), supportsMms(), mmsEnabled());
+}
 
 function fmtTime(s: number) {
   if (!Number.isFinite(s) || s < 0) return '0:00';
@@ -119,7 +126,9 @@ export default function Player(p: Props) {
     (async () => {
       const Hls = (await import('hls.js')).default;
       if (cancelled) return;
-      if (isHlsUrl && !isIOS && Hls.isSupported()) {
+      if (isHlsUrl && wantHlsJs() && Hls.isSupported()) {
+        /* switching engines on a reused <video> needs the old src dropped */
+        if (video.src) { video.removeAttribute('src'); video.load(); }
         const hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 90 });
         hlsRef.current = hls;
         recoveries.current = 0;
@@ -181,7 +190,10 @@ export default function Player(p: Props) {
       }
 
       if (p.resume && p.resume > 5) {
-        video.addEventListener('loadedmetadata', () => { try { video.currentTime = p.resume!; } catch {} }, { once: true });
+        const seekResume = () => { try { video.currentTime = p.resume!; } catch {} };
+        /* metadata may already be in by the time we get here (blob playback) */
+        if (video.readyState >= 1) seekResume();
+        else video.addEventListener('loadedmetadata', seekResume, { once: true });
       }
       video.play().then(() => setBuffering(false)).catch(() => {
         /* autoplay blocked — surface a persistent tap-to-play instead of a dead black frame */
@@ -202,13 +214,43 @@ export default function Player(p: Props) {
     hlsRef.current?.destroy();
   }, []);
 
-  /* wake lock */
+  /* Media Session — lock screen / control centre info + remote handlers */
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const detach = attachMediaSession(
+      { title: p.channel.name, artist: live ? 'Live TV' : p.channel.group || undefined, album: offlineUrl ? 'Offline' : undefined, artworkUrl: '/icon-512.png' },
+      {
+        play: () => v.play().catch(() => {}),
+        pause: () => v.pause(),
+        seekBack: () => { if (!live) v.currentTime = Math.max(0, v.currentTime - 10); },
+        seekForward: () => { if (!live) v.currentTime += 10; },
+        seekTo: (t) => { if (!live) v.currentTime = t; },
+        stop: () => p.onClose(),
+      },
+    );
+    return detach;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.channel.id, p.channel.name, p.channel.group, live, offlineUrl, p.onClose]);
+
+  /* wake lock — re-acquire after the screen comes back */
   useEffect(() => {
     let wl: any = null;
-    if ('wakeLock' in navigator) {
-      (navigator as any).wakeLock?.request('screen').then((l: any) => (wl = l)).catch(() => {});
-    }
-    return () => wl?.release?.().catch?.(() => {});
+    const acquire = () => {
+      (navigator as any).wakeLock?.request('screen')
+        .then((l: any) => (wl = l))
+        .catch(() => {});
+    };
+    if ('wakeLock' in navigator) acquire();
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') { wl?.release?.().catch?.(() => {}); wl = null; }
+      else if (!wl) acquire();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      wl?.release?.().catch?.(() => {});
+    };
   }, []);
 
   /* ---------- video events ---------- */
@@ -304,7 +346,11 @@ export default function Player(p: Props) {
       else if (e.key === 'm' || e.key === 'M') { v.muted = !v.muted; setMuted(v.muted); showControls(); }
       else if (e.key === 'ArrowDown') v.volume = Math.max(0, v.volume - 0.1);
       else if (e.key === 'ArrowUp') v.volume = Math.min(1, v.volume + 0.1);
-      else if (e.key === 'Escape') p.onClose();
+      else if (e.key === 'Escape') {
+        /* first Escape leaves fullscreen; only close the player when inline */
+        const d = document as any;
+        if (!d.fullscreenElement && !d.webkitFullscreenElement) p.onClose();
+      }
       else if (e.key === 'f' || e.key === 'F') contRef.current?.requestFullscreen?.().catch(() => {});
     };
     window.addEventListener('keydown', onKey);

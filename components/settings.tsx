@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Channel, Playlist } from '@/lib/types';
 import { Sheet, Button, IconChevron, GroupRow, Row, IconTrash } from './ui';
-import { getDownloadIndex, removeDownload, fmtBytes, DownloadInfo } from '@/lib/downloads';
+import { getDownloadIndex, removeDownload, fmtBytes, DownloadInfo, storageStatus } from '@/lib/downloads';
 
 export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hiddenCount, tmdbKey, setTmdbKey, status,
   hideGroup, renameGroup, reorderGroup, unhideAll, moveToGroup, allChannels,
@@ -26,7 +26,8 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
 }) {
   const [moveId, setMoveId] = useState('');
   const [dl, setDl] = useState<DownloadInfo[]>([]);
-  useEffect(() => { if (open) getDownloadIndex().then(setDl); }, [open]);
+  const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
+  useEffect(() => { if (open) { getDownloadIndex().then(setDl); storageStatus().then(setStorage); } }, [open]);
   const list = groups.length ? groups : [];
 
   return (
@@ -60,6 +61,10 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
         </GroupRow>
 
         <GroupRow title="Saved offline">
+          <Row className="py-2">
+            <span className="flex-1 text-[16px]">Storage used</span>
+            <span className="text-[13px] text-white/40">{storage ? `${fmtBytes(storage.usage)} of ${fmtBytes(storage.quota)}` : '—'}</span>
+          </Row>
           {dl.length === 0 ? (
             <div className="px-4 py-3 text-[14px] text-white/40">Nothing saved yet — open a film and tap Download.</div>
           ) : dl.map((d) => (
@@ -120,7 +125,7 @@ export function SettingsSheet({ open, onClose, playlist, groups, allGroups, hidd
               <span>Restore from file</span><IconChevron className="w-4 h-4 text-white/30" />
             </div>
           </label>
-          <div className="px-4 pb-3 text-[12px] text-white/35">Safari may clear website data if the app is unused for weeks — keep a backup.</div>
+          <div className="px-4 pb-3 text-[12px] text-white/35">Safari may clear website data if the app is unused for weeks, and can evict downloads when storage runs low — keep a backup.</div>
         </GroupRow>
 
         {!isStandalone && (

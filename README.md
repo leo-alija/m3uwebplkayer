@@ -30,10 +30,23 @@ Repo unchanged since the "build plan" commit — PLAN.md phases 0–5 are all st
 | 4 ✅ | EPG timeline grid `components/guide-grid.tsx` (rows → real grid), tap → player, now-line, mini catch-up entry | grid renders + navigates |
 | 5 ✅ | Catch-up engine `lib/catchup.ts`: URL builder per provider mode (parser already reads catchup tags), playback route, "catch-up from EPG" entry point | playback starts from the EPG entry |
 | 6 ✅ | Netflix set: watchlist shelf, Top 10 shelf, More Like This, design tokens (phase out 50+ hardcoded hexes to CSS vars) | shelves live, plugin-free tokens |
-| 7 | iOS stack: hls.js via ManagedMediaSource (17.1+, keep native fallback < 17.1), Media Session lock-screen, multiview device tile caps, offline-download quota guard (eviction reminder), PWA update toast | feature flag + device matrix notes |
+| 7 ✅ | iOS stack: hls.js via ManagedMediaSource (17.1+, keep native fallback < 17.1), Media Session lock-screen, multiview device tile caps, offline-download quota guard (eviction reminder), PWA update toast | feature flag + device matrix notes |
 | 8 | Perf/scale: worker M3U parse + import progress UI (50k entries no longer stall main thread); Xtream category refresh UX; logo fallback for logo-less channels | import progress w/ 50k fixture |
 | 9 | Tests: Vitest on m3u/series/epg/catchup, fixture `../popular-kids-iptv.m3u` + BOM/CRLF/malformed cases | suite green in CI |
 | 10 | Owner manual QA (not automatable): Safari script from Stage 1 output — import URL/file/Xtream, keypad zapping, catch-up, MMS quality menu, multiview caps, lock-screen controls | checklist signed off |
+
+### Stage 7 device matrix & feature flag
+
+Playback engine per device (`lib/env.ts`, shared by player and multiview):
+
+| Device | Engine |
+|---|---|
+| iOS/iPadOS < 17.1 | native HLS (video element) |
+| iOS/iPadOS 17.1+ | hls.js via ManagedMediaSource |
+| Desktop Safari | hls.js (quality/audio menus work) |
+| Chrome/Firefox/Edge | hls.js via MSE |
+
+Feature flag: set localStorage key `mmsHls` to `off` to force native HLS on iOS regardless of version. Multiview caps: 2 tiles on phones, 6 on iPad/desktop. Downloads refuse to start past 90% storage quota; persistence is requested on first download and the eviction reminder lives in Settings → Backup. Stage 7 also carried player fixes: engine-switch attach hygiene on the reused `<video>`, resume seek when metadata already loaded, volume slider restored on desktop Safari, Escape no longer closes the player while fullscreen, wake lock re-acquires after screen wake.
 
 ## Environment
 
