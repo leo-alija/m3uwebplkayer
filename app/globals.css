@@ -85,9 +85,43 @@ input, select, textarea, button { font-size: 16px; }
   inset: 0;
   z-index: 50;
   background: #000;
+  /* iOS: never let long-press select text or pop the magnifier over controls */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 video::-webkit-media-controls { display: none !important; }
 video::-webkit-media-text-track-container { transform: var(--subtitle-y, translateY(0)); }
+
+/* Custom subtitle cues (player.tsx renderer): Apple TV–style bottom-centred
+   pills, positioned in the video AREA (not the scaled <video>), so picture
+   modes like Fill/Zoom can never crop them away. Size/colour/background are
+   user-tunable from Settings via the --sub-* custom properties. */
+.sub-cue-line {
+  background: var(--sub-bg, rgba(8, 8, 10, 0.62));
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: var(--sub-size, 15px);
+  line-height: 1.4;
+  text-align: center;
+  color: var(--sub-color, #fff);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  max-width: 100%;
+  white-space: pre-wrap;
+}
+@media (orientation: landscape) {
+  .sub-cue-line { font-size: calc(var(--sub-size, 15px) * 1.2); padding: 5px 14px; }
+}
+
+/* Screensaver: slow drifting clock */
+.drift-slow { animation: driftClock 9s ease-in-out infinite alternate; }
+@keyframes driftClock {
+  from { transform: translate3d(-4vw, 2vh, 0) scale(1); }
+  to { transform: translate3d(4vw, -2vh, 0) scale(1.06); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drift-slow { animation: none; }
+}
 
 /* Subtitle presentation: dark backing + shadow so cues survive bright scenes */
 video::cue {

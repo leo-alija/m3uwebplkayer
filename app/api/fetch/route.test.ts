@@ -14,6 +14,11 @@ function req(url: string, headers: Record<string, string> = {}, bin = false) {
   return new NextRequest(`http://localhost:3000/api/fetch?${q}`, { headers });
 }
 
+function reqHls(url: string) {
+  const q = new URLSearchParams({ url, hls: '1' });
+  return new NextRequest(`http://localhost:3000/api/fetch?${q}`);
+}
+
 function textResponse(body: string, init: ResponseInit = {}) {
   return new Response(body, { status: 200, headers: { 'content-type': 'text/plain' }, ...init });
 }
@@ -52,6 +57,39 @@ describe('GET /api/fetch — request contract', () => {
     expect(res.headers.get('content-type')).toBe('video/mp4');
     const call = fetchMock.mock.calls[0] as [URL, RequestInit];
     expect((call[1].headers as Record<string, string>)['range']).toBe('bytes=0-2');
+  });
+});
+
+describe('GET /api/fetch — HLS manifest rewriting', () => {
+  it('rewrites manifests on hls=1 requests to absolute proxied URLs', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(textResponse(
+      '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=900000\nv/hi.m3u8\n#EXTINF:10,\nseg_1.ts\n',
+      { headers: { 'content-type': 'application/vnd.apple.mpegurl' } },
+    )));
+    const res = await GET(reqHls('https://provider.example/live/ch.m3u8'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/vnd.apple.mpegurl');
+    const body = await res.text();
+    expect(body).toContain(`http://localhost:3000/api/fetch?url=${encodeURIComponent('https://provider.example/live/v/hi.m3u8')}&hls=1`);
+    expect(body).toContain(`http://localhost:3000/api/fetch?url=${encodeURIComponent('https://provider.example/live/seg_1.ts')}&bin=1`);
+  });
+
+  it('leaves non-hls requests (playlist imports) untouched even for m3u8 content', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(textResponse('#EXTM3U\n#EXTINF:10,\nseg_1.ts\n')));
+    const res = await GET(req('https://provider.example/list.m3u8'));
+    expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(await res.text()).toBe('#EXTM3U\n#EXTINF:10,\nseg_1.ts\n');
+  });
+
+  it('uses the final redirect target as the rewrite base', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'https://cdn.example.com/real/ch.m3u8' } }))
+      .mockResolvedValueOnce(textResponse('#EXTM3U\nseg.ts\n'));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await GET(reqHls('https://provider.example/jump.m3u8'));
+    const body = await res.text();
+    expect(body).toContain(`url=${encodeURIComponent('https://cdn.example.com/real/seg.ts')}&bin=1`);
   });
 });
 

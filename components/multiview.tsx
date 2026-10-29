@@ -3,19 +3,22 @@
 import { useEffect, useRef, useState } from 'react';
 import type HlsJs from 'hls.js';
 import { Channel } from '@/lib/types';
-import { IconClose } from './ui';
+import { IconClose, IconPlayCircle, IconPauseCircle } from './ui';
 import { isIOS, iosVersion, supportsMms, mmsEnabled, preferHlsJs } from '@/lib/env';
+import { proxiedStreamUrl } from '@/lib/hls-proxy';
 
 function MVTile({ ch, onExpand, onRemove, solo, onSolo, twoCol }: { ch: Channel; onExpand: () => void; onRemove: () => void; solo: boolean; onSolo: () => void; twoCol: boolean }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [failed, setFailed] = useState(false);
+  const [paused, setPaused] = useState(false);
 
   useEffect(() => {
     const video = ref.current;
     if (!video) return;
     let hls: HlsJs | null = null;
     let cancelled = false;
-    const url = ch.url;
+    /* cross-origin streams through the proxy, same as the single player */
+    const url = proxiedStreamUrl(ch.url);
     (async () => {
       /* same engine choice as the player: native HLS below iOS 17.1, hls.js (via
          MMS there) elsewhere — with a native fallback if hls.js can't attach */
@@ -39,6 +42,26 @@ function MVTile({ ch, onExpand, onRemove, solo, onSolo, twoCol }: { ch: Channel;
     return () => { cancelled = true; if (hls) hls.destroy(); };
   }, [ch.url]);
 
+  /* keep the pause button honest even when playback stops on its own */
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    const sync = () => setPaused(v.paused);
+    v.addEventListener('play', sync);
+    v.addEventListener('pause', sync);
+    return () => {
+      v.removeEventListener('play', sync);
+      v.removeEventListener('pause', sync);
+    };
+  }, []);
+
+  function toggleTilePlay() {
+    const v = ref.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
+  }
+
   return (
     <div className="relative bg-black rounded-xl overflow-hidden" style={{ aspectRatio: '16 / 9' }}>
       <video ref={ref} playsInline muted={!solo} autoPlay loop
@@ -52,6 +75,11 @@ function MVTile({ ch, onExpand, onRemove, solo, onSolo, twoCol }: { ch: Channel;
         <div className={`min-w-0 flex-1 truncate text-[10px] px-1.5 py-0.5 rounded-md ${solo ? 'bg-accent text-black font-bold' : 'bg-black/60'}`}>
           {solo ? '♪ ' : ''}{ch.name}
         </div>
+      </div>
+      <div className="absolute bottom-1 left-1.5">
+        <button onClick={toggleTilePlay} className="press w-7 h-7 rounded-full bg-black/70 text-white flex items-center justify-center" title="Play/Pause">
+          {paused ? <IconPlayCircle className="w-4 h-4" /> : <IconPauseCircle className="w-4 h-4" />}
+        </button>
       </div>
       <div className="absolute bottom-1 right-1 flex gap-1">
         <button onClick={onSolo} className="press w-7 h-7 rounded-full bg-black/70 text-[10px] font-bold" title="Solo audio">{solo ? '♪' : '🔇'}</button>

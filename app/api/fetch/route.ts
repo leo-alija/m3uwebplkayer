@@ -1,8 +1,11 @@
-/* Proxy for playlists (text) and direct-file downloads (bin). Same public
-   contract as before (?url=, ?bin=1); now with SSRF hardening — every hop
-   (including redirects) passes the guard, plus size caps and timeouts. */
+/* Proxy for playlists (text), HLS playback (hls=1: manifests are rewritten so
+   every nested URL is also proxied — see lib/hls-proxy.ts) and direct-file
+   downloads (bin). Same public contract as before (?url=, ?bin=1); now with
+   SSRF hardening — every hop (including redirects) passes the guard, plus
+   size caps and timeouts. */
 import { NextRequest, NextResponse } from 'next/server';
 import { GUARD_ERROR, isPubliclyResolvable, parseTargetUrl } from './guard';
+import { rewriteManifest } from '@/lib/hls-proxy';
 
 const MAX_TEXT_BYTES = 512 * 1024 * 1024;     // playlists: 512 MB (m3u_plus pastes can be far past 64 MB)
 const MAX_BIN_BYTES = 10 * 1024 ** 3;         // downloads: 10 GB
@@ -73,6 +76,8 @@ export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get('url');
   if (!url) return NextResponse.json({ error: 'missing url' }, { status: 400 });
   const bin = req.nextUrl.searchParams.get('bin') === '1';
+  const hls = req.nextUrl.searchParams.get('hls') === '1';
+  const meta = req.nextUrl.searchParams.get('meta') === '1';
 
   if (!parseTargetUrl(url)) return blocked();
   let target = new URL(url);
@@ -96,6 +101,20 @@ export async function GET(req: NextRequest) {
     }
     if (res instanceof NextResponse) return res; // guard block or upstream error
     if (!res.ok) return NextResponse.json({ error: `upstream ${res.status}` }, { status: 502 });
+
+    /* Diagnostics probe ("Test guide URL"): headers only, body discarded. */
+    if (meta) {
+      try { res.body?.cancel(); } catch {}
+      return NextResponse.json({
+        ok: true,
+        finalUrl: target.href,
+        status: res.status,
+        contentType: res.headers.get('content-type') || '',
+        contentLength: Number(res.headers.get('content-length')) || 0,
+        contentEncoding: res.headers.get('content-encoding') || '',
+        acceptRanges: res.headers.get('accept-ranges') || '',
+      });
+    }
 
     if (bin) {
       const len = Number(res.headers.get('content-length')) || 0;
@@ -121,6 +140,16 @@ export async function GET(req: NextRequest) {
 
     clearTimeout(timer);
     const text = await readCapped(res, MAX_TEXT_BYTES, TEXT_IDLE_TIMEOUT_MS);
+    /* HLS playback: rewrite the manifest so hls.js and native iOS HLS can play
+       entirely through this proxy. Only &hls=1 requests are rewritten —
+       playlist imports fetch the same endpoints without it and must get the
+       untouched source text. `target` is the final redirect destination, the
+       correct base for relative URLs inside the manifest. */
+    if (hls && text.includes('#EXTM3U')) {
+      return new NextResponse(rewriteManifest(text, target.href, req.nextUrl.origin), {
+        headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+      });
+    }
     return new NextResponse(text, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'fetch failed' }, { status: 502 });

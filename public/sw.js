@@ -1,4 +1,4 @@
-const CACHE = 'm3uwp-v4';
+const CACHE = 'm3uwp-v5';
 const ASSETS = ['/', '/icon-192.png', '/icon-512.png'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).catch(() => {}));

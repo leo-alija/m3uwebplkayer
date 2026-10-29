@@ -23,18 +23,21 @@ export type LaidProgram = {
   now: boolean;
 };
 
-/* Clamp a channel's programmes onto the visible window, in pixel space. */
+/* Clamp a channel's programmes onto the visible window, in pixel space.
+   offsetMinutes shifts programme windows (guide time offset setting). */
 export function layoutPrograms(
   programs: Program[] | undefined,
   windowStartMs: number,
   windowEndMs: number,
   nowMs: number,
+  offsetMinutes = 0,
 ): LaidProgram[] {
   if (!programs) return [];
+  const shift = offsetMinutes * 60_000;
   const out: LaidProgram[] = [];
   for (const program of programs) {
-    const startMs = Math.max(parseXmltvDate(program.start).getTime(), windowStartMs);
-    const endMs = Math.min(parseXmltvDate(program.stop).getTime(), windowEndMs);
+    const startMs = Math.max(parseXmltvDate(program.start).getTime() + shift, windowStartMs);
+    const endMs = Math.min(parseXmltvDate(program.stop).getTime() + shift, windowEndMs);
     if (endMs <= startMs) continue;
     out.push({
       program,
@@ -54,13 +57,14 @@ function clock(ms: number) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function GuideGrid({ channels, epgFor, onPlay, onCatchup, total, loadMore }: {
+export function GuideGrid({ channels, epgFor, onPlay, onCatchup, total, loadMore, offsetMinutes = 0 }: {
   channels: Channel[];
   epgFor: (ch: Channel) => Program[] | undefined;
   onPlay: (ch: Channel) => void;
   onCatchup: (ch: Channel, prog: Program) => void;
   total: number;
   loadMore: () => void;
+  offsetMinutes?: number;
 }) {
   const [windowStartMs, setWindowStartMs] = useState(() => floorSlot(Date.now()));
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -102,7 +106,7 @@ export function GuideGrid({ channels, epgFor, onPlay, onCatchup, total, loadMore
 
             {/* channel rows */}
             {channels.map((ch) => {
-              const laid = layoutPrograms(epgFor(ch), windowStartMs, windowEndMs, nowMs);
+              const laid = layoutPrograms(epgFor(ch), windowStartMs, windowEndMs, nowMs, offsetMinutes);
               return (
                 <div key={ch.id} className="hairline-b relative flex" style={{ height: ROW_H }}>
                   <button onClick={() => onPlay(ch)}

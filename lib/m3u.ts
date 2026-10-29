@@ -85,6 +85,29 @@ function extractQualityTag(name: string): string | null {
   return m ? m[1].toUpperCase() : null;
 }
 
+/* Content-derived stable IDs: the same URL+name hashes to the same id across
+   re-imports, so favourites, custom order and folder moves survive a playlist
+   refresh. Quality variants keep distinct ids because the display name (which
+   carries HD/FHD/4K) is part of the hash. */
+export function channelIdentity(url: string, name: string): string {
+  let h = 0x811c9dc5;
+  const s = `${url}|${name}`;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `c${h.toString(36)}`;
+}
+
+function dedupeIds(channels: Channel[]): Channel[] {
+  const seen = new Map<string, number>();
+  return channels.map((c) => {
+    const n = seen.get(c.id) || 0;
+    seen.set(c.id, n + 1);
+    return n === 0 ? c : { ...c, id: `${c.id}_${n + 1}` };
+  });
+}
+
 type Pending = {
   name: string;
   logo?: string;
@@ -212,8 +235,8 @@ export class M3UScanner {
     }
     let nextImplicit = highestExplicit + 1;
 
-    const channels: Channel[] = ordered.map((e, index) => ({
-      id: `ch_${index + 1}`,
+    const channels: Channel[] = dedupeIds(ordered.map((e) => ({
+      id: channelIdentity(e.url, e.name),
       name: e.name,
       url: e.url,
       logo: e.logo,
@@ -228,7 +251,7 @@ export class M3UScanner {
       catchupDays: e.catchupDays,
       catchupSource: e.catchupSource,
       qualityTag: extractQualityTag(e.name),
-    }));
+    })));
 
     return { channels, epgUrl: this.epgUrl };
   }

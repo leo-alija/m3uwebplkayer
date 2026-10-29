@@ -69,6 +69,40 @@ export async function getTmdb(type: 'movie' | 'tv', title: string, userKey?: str
   }
 }
 
+export type TmdbListItem = {
+  id: number;
+  title: string;
+  poster_path?: string;
+  backdrop_path?: string;
+  vote_average?: number;
+  release_date?: string;
+  overview?: string;
+};
+
+/**
+ * Trending / Popular / Top Rated shelves. Returns null when no key is
+ * configured or the request fails, so callers fall back to library-built
+ * shelves without any error UI.
+ */
+export async function getTmdbList(
+  kind: 'trending' | 'popular' | 'top_rated',
+  type: 'movie' | 'tv',
+  userKey?: string,
+): Promise<TmdbListItem[] | null> {
+  try {
+    const url = new URL('/api/tmdb', window.location.origin);
+    url.searchParams.set('list', kind);
+    url.searchParams.set('type', type);
+    if (userKey) url.searchParams.set('key', userKey);
+    const res = await fetch(url.toString());
+    if (!res.ok) return null;
+    const data = await res.json() as { results?: TmdbListItem[] };
+    return data.results?.length ? data.results : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function clearTmdbCache() {
   try {
     const { idbDel } = await import('./idb');

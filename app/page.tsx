@@ -3,17 +3,22 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { buildXtreamM3uUrl } from '@/lib/m3u';
 import { parseM3UWithProgress } from '@/lib/m3u-client';
 import { buildCatchupUrl } from '@/lib/catchup';
-import { parseXMLTV, nowProgram, parseXmltvDate } from '@/lib/epg';
+import { parseXMLTV, nowProgram, parseXmltvDate, progWindow } from '@/lib/epg';
+import { fetchEpg } from '@/lib/epg-client';
 import { load, save, loadPlaylist, savePlaylist, clearPlaylist as clearPlaylistStore } from '@/lib/storage';
+import { idbGet, idbSet, idbDel } from '@/lib/idb';
 import { groupIntoFolders } from '@/lib/series';
-import { getTmdb } from '@/lib/tmdb';
+import { getTmdb, getTmdbList, type TmdbListItem } from '@/lib/tmdb';
 import { downloadVideo, canDownload, getDownloadIndex } from '@/lib/downloads';
 import { mvCap } from '@/lib/env';
-import { Channel, Playlist, Program, SeriesFolder, SeriesEpisode, Profile, ImportProgress } from '@/lib/types';
+import { buildFolders } from '@/lib/folders';
+import { Channel, Playlist, PlaylistEntry, Program, SeriesFolder, SeriesEpisode, Profile, ImportProgress, AppSettings, DEFAULT_PROFILE, GUEST_PROFILE, DEFAULT_SETTINGS } from '@/lib/types';
 import Player from '@/components/player';
 import Multiview from '@/components/multiview';
 import DetailSheet from '@/components/detail';
-import { ImportSheet, ProfilesSheet, PinOverlay, SearchOverlay } from '@/components/sheets';
+import LivetvScreen, { sortChannels } from '@/components/livetv';
+import FlixScreen, { buildFlixCategories, type FlixItem } from '@/components/flix';
+import { ImportSheet, ProfilesSheet, PinOverlay, SearchOverlay, type SearchScope } from '@/components/sheets';
 import { SettingsSheet } from '@/components/settings';
 import { Hero, Shelf, LiveTile, PosterCard, Aurora, Skeletons, GenreStrip, type HeroSlide } from '@/components/home-flix';
 import { GuideGrid } from '@/components/guide-grid';
@@ -21,23 +26,26 @@ import { IconHome, IconLive, IconSeries, IconMovie, IconGuide, IconSearch, IconS
 
 type Tab = 'home' | 'live' | 'series' | 'movies' | 'guide';
 
-const DEFAULT_PROFILE: Profile = {
-  id: 'default', name: 'Default', favorites: [], recents: [], hiddenGroups: [], renamed: {},
-  channelOrder: [], groupOrder: [], continueWatching: [], watchHistory: [], watchlist: [], playCounts: {},
-};
-
 const isIOS = typeof navigator !== 'undefined' && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
+/* 4-digit PINs are stored hashed, never in plain text */
+function hashPin(pin: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < pin.length; i++) { h ^= pin.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return `h${h.toString(36)}`;
+}
+
+const norm = (s: string) => s.toLowerCase().replace(/\s*[(\[][^)\]]*[)\]]\)?/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+
 export default function Home() {
-  const [profiles, setProfiles] = useState<Profile[]>([DEFAULT_PROFILE]);
+  const [profiles, setProfiles] = useState<Profile[]>([{ ...DEFAULT_PROFILE }, { ...GUEST_PROFILE }]);
   const [activeProfileId, setActiveProfileId] = useState('default');
+  const [playlistIndex, setPlaylistIndex] = useState<PlaylistEntry[]>([]);
+  const [activePlaylistId, setActivePlaylistId] = useState('');
   const [playlist, setPlaylist] = useState<Playlist | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [tab, setTab] = useState<Tab>('home');
-  const [liveGroupPick, setLiveGroupPick] = useState('all');
-  const [liveFilter, setLiveFilter] = useState('');
-  const [epg, setEpg] = useState<Record<string, Program[]>>({});
-  const [visible, setVisible] = useState<Record<string, number>>({ live: 120, series: 90, movies: 60, guide: 80 });
+  const [visible, setVisible] = useState<Record<string, number>>({ guide: 80 });
 
   const [showImport, setShowImport] = useState(false);
   const [importUrl, setImportUrl] = useState('');
@@ -50,8 +58,7 @@ export default function Home() {
 
   const [selected, setSelected] = useState<{ channel: Channel; resume: number; catchup?: boolean } | null>(null);
   const [detail, setDetail] = useState<{ kind: 'movie' | 'series'; title: string; folder?: SeriesFolder; channel?: Channel } | null>(null);
-  const [gridView, setGridView] = useState(false);
-  const [downloads, setDownloads] = useState<Record<string, { pct: number; done?: boolean }>>({});
+  const [downloads, setDownloads] = useState<Record<string, { pct: number; done?: boolean; failed?: string }>>({});
   const dlAbort = useRef<Record<string, AbortController>>({});
 
   const [mv, setMv] = useState<Channel[]>([]);
@@ -61,14 +68,21 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [showProfiles, setShowProfiles] = useState(false);
   const [showPin, setShowPin] = useState<{ profile: Profile; resolve: (ok: boolean) => void } | null>(null);
+  const [coldPin, setColdPin] = useState<Profile | null>(null);
 
   const [tmdbKey, setTmdbKey] = useState('');
   const [meta, setMeta] = useState<Record<string, any>>({});
+  const [settings, setSettingsState] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [epg, setEpg] = useState<Record<string, Program[]>>({});
+  const [epgInfo, setEpgInfo] = useState<{ programmeCount: number; channelCount: number; lastRefresh: number | null; loading: number }>({ programmeCount: 0, channelCount: 0, lastRefresh: null, loading: 0 });
+  const [hasRestoreSnapshot, setHasRestoreSnapshot] = useState(false);
+  const [tmdbLists, setTmdbLists] = useState<Record<string, TmdbListItem[] | null>>({});
   const [status, setStatus] = useState('');
   const [swUpdate, setSwUpdate] = useState(false);
   const [showInstallHint, setShowInstallHint] = useState(false);
   const [isStandalone, setIsStandalone] = useState(true);
   const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const launched = useRef(false);
 
   const activeProfile = profiles.find((p) => p.id === activeProfileId) || profiles[0];
 
@@ -82,27 +96,82 @@ export default function Home() {
     statusTimer.current = setTimeout(() => setStatus(''), 3000);
   }, []);
 
+  const setSettings = useCallback((patch: Partial<AppSettings>) => {
+    setSettingsState((s) => ({ ...s, ...patch }));
+  }, []);
+
+  const guideOffsetMinutes = settings.guideOffsetHours * 60;
+
+  /* subtitle appearance → CSS custom properties */
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--sub-size', settings.subSize === 's' ? '13px' : settings.subSize === 'l' ? '19px' : '15px');
+    root.style.setProperty('--sub-color', settings.subColor);
+    root.style.setProperty('--sub-bg', settings.subBg);
+  }, [settings.subSize, settings.subColor, settings.subBg]);
+
   /* ---------- load / persist ---------- */
   useEffect(() => {
-    const ps = load<Profile[]>('profiles', [DEFAULT_PROFILE]);
-    setProfiles(ps.length ? ps.map((p) => ({ ...DEFAULT_PROFILE, ...p })) : [DEFAULT_PROFILE]);
-    setActiveProfileId(load('activeProfileId', 'default'));
+    const storedProfiles = (): Profile[] =>
+      load<Profile[]>('profiles', []).filter((p) => p.id !== 'guest').map((p) => ({ ...DEFAULT_PROFILE, ...p }));
+    const ps = storedProfiles();
+    const merged: Profile[] = [...(ps.length ? ps : [{ ...DEFAULT_PROFILE } as Profile]), { ...GUEST_PROFILE }];
+    setProfiles(merged);
+    const active = load('activeProfileId', merged[0].id);
+    setActiveProfileId(merged.some((p) => p.id === active) ? active : merged[0].id);
     setOverrides(load('groupOverrides', {}));
     setTmdbKey(load('tmdbKey', ''));
-    setCanRefresh(!!load('lastImport', null));
+    const storedSettings = load<Partial<AppSettings>>('settings', {});
+    setSettingsState({ ...DEFAULT_SETTINGS, ...storedSettings });
+    idbGet<any>('restoreSnapshot').then((snap) => setHasRestoreSnapshot(!!snap));
     const standalone = (window.navigator as any).standalone === true || window.matchMedia('(display-mode: standalone)').matches;
     setIsStandalone(standalone);
-    loadPlaylist<Playlist>().then((pl) => {
-      if (pl) {
-        setPlaylist(pl);
-        if (pl.epgUrl) loadEpg(pl.epgUrl);
+
+    /* playlist index + active playlist (migrates the legacy single playlist) */
+    (async () => {
+      let index = load<PlaylistEntry[]>('playlistIndex', []);
+      if (!index.length) {
+        const legacy = await loadPlaylist<Playlist>();
+        if (legacy) {
+          const entry: PlaylistEntry = { id: 'default', name: legacy.name || 'My playlist', channelCount: legacy.channels.length, epgUrl: legacy.epgUrl, importedAt: legacy.importedAt };
+          await idbSet('pl:default', legacy);
+          index = [entry];
+          save('playlistIndex', index);
+        }
+      }
+      setPlaylistIndex(index);
+      const activePl = load('activePlaylistId', index[0]?.id || '');
+      setActivePlaylistId(activePl);
+      let pl: Playlist | null = null;
+      if (index.length) {
+        pl = await idbGet<Playlist>(`pl:${activePl || index[0].id}`);
+        if (pl) {
+          setPlaylist(pl);
+          if (pl.epgUrl) loadEpg(pl.epgUrl);
+        } else {
+          setShowImport(true);
+        }
       } else {
         if (isIOS && !standalone) setShowInstallHint(true);
         setShowImport(true);
       }
-    });
-    /* PWA update detection: when a new service worker finishes installing
-       while we have one controlling the page, offer a reload */
+      /* resume-last-channel on launch */
+      if (storedSettings.resumeLastChannel && !launched.current) {
+        launched.current = true;
+        const prof = storedProfiles().find((p) => p.id === active);
+        const lastId = prof?.recents?.[0];
+        if (lastId && pl) {
+          const ch = pl.channels.find((c: Channel) => c.id === lastId);
+          if (ch && (!ch.contentType || ch.contentType === 'LIVE')) setTimeout(() => selectChannelRef.current?.(ch), 300);
+        }
+      }
+    })();
+
+    /* cold-start PIN */
+    const prof = storedProfiles().find((p) => p.id === load('activeProfileId', 'default'));
+    if (prof?.pin) setColdPin(prof);
+
+    /* PWA update detection */
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').then((reg) => {
         reg.addEventListener('updatefound', () => {
@@ -115,10 +184,31 @@ export default function Home() {
     }
   }, []);
 
-  useEffect(() => { save('profiles', profiles); }, [profiles]);
+  useEffect(() => { save('profiles', profiles.filter((p) => !p.guest)); }, [profiles]);
   useEffect(() => { save('activeProfileId', activeProfileId); }, [activeProfileId]);
   useEffect(() => { save('groupOverrides', overrides); }, [overrides]);
   useEffect(() => { save('tmdbKey', tmdbKey); }, [tmdbKey]);
+  useEffect(() => { save('settings', settings); }, [settings]);
+  useEffect(() => { save('activePlaylistId', activePlaylistId); }, [activePlaylistId]);
+
+  /* ---------- auto-refresh timers ---------- */
+  const refreshPlaylist = useRef(() => {});
+  refreshPlaylist.current = () => { if (canRefresh) doRefreshPlaylist(); };
+  useEffect(() => {
+    const mins = { manual: 0, '15m': 15, '30m': 30, '1h': 60, '2h': 120 }[settings.playlistAutoRefresh] || 0;
+    if (!mins) return;
+    const t = setInterval(() => refreshPlaylist.current(), mins * 60_000);
+    return () => clearInterval(t);
+  }, [settings.playlistAutoRefresh]);
+
+  const refreshEpg = useRef(() => {});
+  refreshEpg.current = () => { const url = playlist?.epgUrl; if (url) loadEpg(url); };
+  useEffect(() => {
+    const mins = { manual: 0, '1h': 60, '2h': 120, '4h': 240, '6h': 360, '12h': 720 }[settings.epgAutoRefresh] || 0;
+    if (!mins) return;
+    const t = setInterval(() => refreshEpg.current(), mins * 60_000);
+    return () => clearInterval(t);
+  }, [settings.epgAutoRefresh, playlist?.epgUrl]);
 
   /* ---------- epg ---------- */
   const epgLower = useMemo(() => {
@@ -136,33 +226,19 @@ export default function Home() {
   }, [epg, epgLower]);
 
   async function loadEpg(url: string) {
+    setEpgInfo((i) => ({ ...i, loading: i.loading + 1 }));
     try {
-      const text = await fetchText(url);
-      setEpg(parseXMLTV(text));
-    } catch { /* feed may be down; guide stays empty */ }
-  }
-
-  async function fetchText(url: string, onBytes?: (received: number, total: number) => void) {
-    const res = await fetch(`/api/fetch?url=${encodeURIComponent(url)}`);
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      throw new Error(j.error || 'fetch failed');
+      const { epg: parsed, programmeCount, channelCount } = await fetchEpg(url, (bytes) => {
+        setEpgInfo((i) => ({ ...i })); /* streaming; counts arrive at the end */
+      });
+      /* commit only on success — the old guide stays intact on failure */
+      setEpg(parsed);
+      setEpgInfo({ programmeCount, channelCount, lastRefresh: Date.now(), loading: 0 });
+      flash(`Guide loaded — ${programmeCount.toLocaleString()} programmes`);
+    } catch (e: any) {
+      setEpgInfo((i) => ({ ...i, loading: 0 }));
+      flash(e?.message || 'Guide failed — keeping the previous one');
     }
-    if (!onBytes || !res.body) return await res.text();
-    /* stream the download so big playlists show real progress */
-    const contentTotal = Number(res.headers.get('content-length')) || 0;
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let received = 0;
-    let out = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.byteLength;
-      out += decoder.decode(value, { stream: true });
-      onBytes(received, contentTotal);
-    }
-    return out + decoder.decode();
   }
 
   /* ---------- import ---------- */
@@ -171,17 +247,25 @@ export default function Home() {
       ? { ...c, group: overrides[c.id], groups: [overrides[c.id]] }
       : c)), [overrides]);
 
-  async function importPlaylistText(text: string, name: string, epgUrl?: string) {
+  async function importPlaylistText(text: string, name: string, epgUrl?: string, asNew = true) {
     setImportProgress({ phase: 'parse', lines: 0, total: 0 });
     const parsed = await parseM3UWithProgress(text, (p) => setImportProgress({ phase: 'parse', ...p }));
-    const chs = applyOverrides(parsed.channels);
+    const importedAt = Date.now();
+    const chs = applyOverrides(parsed.channels).map((c, i) => ({ ...c, addedAt: importedAt + i }));
     setImportProgress({ phase: 'save' });
-    const pl: Playlist = { name, channels: chs, epgUrl: epgUrl || parsed.epgUrl, importedAt: Date.now() };
+    const pl: Playlist = { name, channels: chs, epgUrl: epgUrl || parsed.epgUrl, importedAt };
+    const id = asNew ? `pl_${importedAt.toString(36)}` : activePlaylistId || 'default';
+    await idbSet(`pl:${id}`, pl);
+    const entry: PlaylistEntry = { id, name, channelCount: chs.length, epgUrl: pl.epgUrl, importedAt };
+    const index = asNew ? [...playlistIndex.filter((x) => x.id !== id), entry] : playlistIndex.map((x) => (x.id === id ? entry : x));
+    setPlaylistIndex(index);
+    save('playlistIndex', index);
     setPlaylist(pl);
-    await savePlaylist(pl);
+    setActivePlaylistId(id);
     setShowImport(false);
     setTab('home');
     setImportProgress(null);
+    setCanRefresh(!!load('lastImport', null));
     flash(`Loaded ${chs.length.toLocaleString()} items`);
     if (pl.epgUrl) loadEpg(pl.epgUrl);
   }
@@ -205,7 +289,7 @@ export default function Home() {
       try {
         await importPlaylistText(String(reader.result || ''), file.name);
         save('lastImport', { kind: 'file', name: file.name });
-        setCanRefresh(false); // file sources can't be re-fetched
+        setCanRefresh(false);
       }
       catch (e: any) { setImportError(e?.message || 'Import failed'); setImportProgress(null); }
       finally { setImporting(false); }
@@ -227,27 +311,48 @@ export default function Home() {
     finally { setImporting(false); }
   }
 
-  /* Re-fetch the last URL/Xtream source with the same pipeline as a fresh
-     import (progress UI included). Channel ids are index-derived, so a
-     refresh of an unchanged provider keeps favourites intact. */
-  async function refreshPlaylist() {
+  async function fetchText(url: string, onBytes?: (received: number, total: number) => void) {
+    const res = await fetch(`/api/fetch?url=${encodeURIComponent(url)}`);
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || 'fetch failed');
+    }
+    if (!onBytes || !res.body) return await res.text();
+    const contentTotal = Number(res.headers.get('content-length')) || 0;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let received = 0;
+    let out = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      out += decoder.decode(value, { stream: true });
+      onBytes(received, contentTotal);
+    }
+    return out + decoder.decode();
+  }
+
+  /* Re-fetch the last URL/Xtream source into the ACTIVE playlist */
+  async function doRefreshPlaylist() {
     const li = load<any>('lastImport', null);
     if (!li || refreshing) return;
     setRefreshing(true);
     try {
+      let text: string; let name: string; let epgUrl: string | undefined;
       if (li.kind === 'url') {
-        const text = await fetchText(li.url, (received, contentTotal) => setImportProgress({ phase: 'download', received, contentTotal }));
-        await importPlaylistText(text, li.url);
+        text = await fetchText(li.url, (received, contentTotal) => setImportProgress({ phase: 'download', received, contentTotal }));
+        name = li.url;
       } else if (li.kind === 'xtream') {
         const host = String(li.host || '');
-        const url = buildXtreamM3uUrl(host, li.user, li.pass);
-        const text = await fetchText(url, (received, contentTotal) => setImportProgress({ phase: 'download', received, contentTotal }));
-        const epgUrl = `${host.replace(/\/+$/, '')}/xmltv.php?username=${encodeURIComponent(li.user)}&password=${encodeURIComponent(li.pass)}`;
-        await importPlaylistText(text, host, epgUrl);
+        text = await fetchText(buildXtreamM3uUrl(host, li.user, li.pass), (received, contentTotal) => setImportProgress({ phase: 'download', received, contentTotal }));
+        name = host;
+        epgUrl = `${host.replace(/\/+$/, '')}/xmltv.php?username=${encodeURIComponent(li.user)}&password=${encodeURIComponent(li.pass)}`;
       } else {
         flash('File imports can’t be refreshed — re-upload the file');
         return;
       }
+      await importPlaylistText(text, name || playlist?.name || 'playlist', epgUrl || playlist?.epgUrl, false);
       flash('Playlist refreshed');
     } catch (e: any) {
       setImportProgress(null);
@@ -255,9 +360,41 @@ export default function Home() {
     } finally { setRefreshing(false); }
   }
 
+  /* ---------- playlist management ---------- */
+  async function switchPlaylist(id: string) {
+    setActivePlaylistId(id);
+    const pl = await idbGet<Playlist>(`pl:${id}`);
+    if (pl) {
+      setPlaylist(pl);
+      setEpg({});
+      setEpgInfo({ programmeCount: 0, channelCount: 0, lastRefresh: null, loading: 0 });
+      if (pl.epgUrl) loadEpg(pl.epgUrl);
+      flash('Playlist switched');
+    }
+  }
+
+  async function deletePlaylist(id: string) {
+    const entry = playlistIndex.find((x) => x.id === id);
+    if (!confirm(`Delete “${entry?.name || id}” (${entry?.channelCount.toLocaleString() || 0} channels)? Favourites and history stay.`)) return;
+    await idbDel(`pl:${id}`);
+    const index = playlistIndex.filter((x) => x.id !== id);
+    setPlaylistIndex(index);
+    save('playlistIndex', index);
+    if (id === activePlaylistId) {
+      if (index.length) await switchPlaylist(index[0].id);
+      else { setPlaylist(null); setActivePlaylistId(''); }
+    }
+    flash('Playlist deleted');
+  }
+
   /* ---------- backup ---------- */
   async function exportData() {
-    const data = { v: 1, profiles, activeProfileId, groupOverrides: overrides, tmdbKey, playlist };
+    const allPlaylists: Record<string, Playlist> = {};
+    for (const entry of playlistIndex) {
+      const pl = await idbGet<Playlist>(`pl:${entry.id}`);
+      if (pl) allPlaylists[entry.id] = pl;
+    }
+    const data = { v: 2, profiles, activeProfileId, groupOverrides: overrides, tmdbKey, settings, playlistIndex, playlists: allPlaylists };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -267,27 +404,75 @@ export default function Home() {
     flash('Backup downloaded');
   }
 
-  function importData(f: File) {
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const d = JSON.parse(String(reader.result));
-        if (d.profiles) { setProfiles(d.profiles); save('profiles', d.profiles); }
-        if (d.activeProfileId) { setActiveProfileId(d.activeProfileId); save('activeProfileId', d.activeProfileId); }
-        if (d.groupOverrides) { setOverrides(d.groupOverrides); save('groupOverrides', d.groupOverrides); }
-        if (typeof d.tmdbKey === 'string') { setTmdbKey(d.tmdbKey); save('tmdbKey', d.tmdbKey); }
-        if (d.playlist) { setPlaylist(d.playlist); savePlaylist(d.playlist); }
-        flash('Backup restored');
-      } catch { flash('Invalid backup file'); }
-    };
-    reader.readAsText(f);
+  async function restoreData(data: any) {
+    /* snapshot first so "Undo last restore" can put everything back */
+    const snapshot: any = { v: 2, profiles, activeProfileId, groupOverrides: overrides, tmdbKey, settings, playlistIndex, playlists: {} };
+    for (const entry of playlistIndex) {
+      const pl = await idbGet<Playlist>(`pl:${entry.id}`);
+      if (pl) snapshot.playlists[entry.id] = pl;
+    }
+    await idbSet('restoreSnapshot', snapshot);
+    setHasRestoreSnapshot(true);
+
+    if (Array.isArray(data.profiles)) {
+      const restored = (data.profiles as Profile[]).map((p) => ({ ...DEFAULT_PROFILE, ...p }));
+      const merged: Profile[] = [...restored.filter((p) => p.id !== 'guest'), { ...GUEST_PROFILE }];
+      setProfiles(merged);
+      save('profiles', merged.filter((p) => !p.guest));
+    }
+    if (data.activeProfileId) { setActiveProfileId(data.activeProfileId); save('activeProfileId', data.activeProfileId); }
+    if (data.groupOverrides) { setOverrides(data.groupOverrides); save('groupOverrides', data.groupOverrides); }
+    if (typeof data.tmdbKey === 'string') { setTmdbKey(data.tmdbKey); save('tmdbKey', data.tmdbKey); }
+    if (data.settings) { setSettingsState({ ...DEFAULT_SETTINGS, ...data.settings }); save('settings', data.settings); }
+    const idx: PlaylistEntry[] = data.playlistIndex || (data.playlist ? [{ id: 'default', name: data.playlist.name, channelCount: data.playlist.channels.length, epgUrl: data.playlist.epgUrl, importedAt: data.playlist.importedAt }] : []);
+    if (idx.length) {
+      save('playlistIndex', idx);
+      setPlaylistIndex(idx);
+      const pls: Record<string, Playlist> = data.playlists || (data.playlist ? { [idx[0].id]: data.playlist } : {});
+      for (const [id, pl] of Object.entries(pls)) await idbSet(`pl:${id}`, pl);
+      await switchPlaylist(idx[0].id);
+    }
+    flash('Backup restored — reloading…');
+    setTimeout(() => location.reload(), 900);
   }
 
-  async function doClearPlaylist() {
-    await clearPlaylistStore();
-    setPlaylist(null);
-    setEpg({});
-    flash('Playlist removed');
+  async function undoRestore() {
+    const snap = await idbGet<any>('restoreSnapshot');
+    if (!snap) { flash('Nothing to undo'); return; }
+    const idx: PlaylistEntry[] = snap.playlistIndex || [];
+    for (const [id, pl] of Object.entries(snap.playlists || {})) await idbSet(`pl:${id}`, pl);
+    for (const entry of playlistIndex) if (!idx.some((x) => x.id === entry.id)) await idbDel(`pl:${entry.id}`);
+    save('playlistIndex', idx);
+    if (Array.isArray(snap.profiles)) save('profiles', snap.profiles.filter((p: Profile) => !p.guest));
+    if (snap.activeProfileId) save('activeProfileId', snap.activeProfileId);
+    if (snap.groupOverrides) save('groupOverrides', snap.groupOverrides);
+    if (snap.tmdbKey != null) save('tmdbKey', snap.tmdbKey);
+    if (snap.settings) save('settings', snap.settings);
+    await idbDel('restoreSnapshot');
+    flash('Restore undone — reloading…');
+    setTimeout(() => location.reload(), 900);
+  }
+
+  async function clearAllData() {
+    if (!confirm('Factory reset: delete playlists, profiles, favourites, history and downloads?')) return;
+    save('profiles', []); save('playlistIndex', []); save('groupOverrides', {}); save('settings', {}); save('tmdbKey', '');
+    const keys = ['playlist', 'dlIndex', 'restoreSnapshot', 'lastImport', 'tmdbKeys'];
+    for (const k of keys) await idbDel(k);
+    if (playlistIndex.length) for (const e of playlistIndex) await idbDel(`pl:${e.id}`);
+    const downloads = await getDownloadIndex();
+    for (const d of downloads) await idbDel(`dl:${d.id}`);
+    flash('All data cleared — reloading…');
+    setTimeout(() => location.reload(), 900);
+  }
+
+  function checkForUpdates() {
+    if (!('serviceWorker' in navigator)) { flash('No service worker — you are on the latest'); return; }
+    navigator.serviceWorker.getRegistration().then((reg) => {
+      if (!reg) { flash('You are on the latest version'); return; }
+      reg.update().then(() => {
+        setTimeout(() => { if (!swUpdate) flash('You are on the latest version'); }, 2500);
+      }).catch(() => flash('Update check failed'));
+    });
   }
 
   /* ---------- profile ---------- */
@@ -303,9 +488,11 @@ export default function Home() {
     return m;
   }, [activeProfile.continueWatching]);
 
+  const selectChannelRef = useRef<(ch: Channel, resume?: number, catchup?: boolean) => void>(() => {});
+
   const selectChannel = useCallback((ch: Channel, resume?: number, catchup?: boolean) => {
     const r = resume ?? resumeMap[ch.id]?.time ?? 0;
-    setSelected({ channel: ch, resume: !ch.contentType || ch.contentType === 'LIVE' ? 0 : r, catchup });
+    setSelected({ channel: ch, resume: (!ch.contentType || ch.contentType === 'LIVE') && !catchup ? 0 : r, catchup });
     updateProfile({
       recents: [ch.id, ...activeProfile.recents.filter((x) => x !== ch.id)].slice(0, 30),
       watchHistory: [ch.id, ...activeProfile.watchHistory.filter((x) => x !== ch.id)].slice(0, 200),
@@ -316,6 +503,7 @@ export default function Home() {
       getTmdb(type as 'movie' | 'tv', ch.name, tmdbKey).then((m) => { if (m) setMeta((prev) => ({ ...prev, [`${type}:${ch.name}`]: m })); });
     }
   }, [activeProfile, updateProfile, resumeMap, tmdbKey, meta]);
+  selectChannelRef.current = selectChannel;
 
   function onProgress(channelId: string, time: number, duration: number) {
     const ch = playlist?.channels.find((c) => c.id === channelId);
@@ -325,7 +513,31 @@ export default function Home() {
     const next = nearEnd
       ? others
       : [{ channelId, time, duration: Number.isFinite(duration) ? duration : 0, updatedAt: Date.now() }, ...others].slice(0, 50);
-    updateProfile({ continueWatching: next });
+    const patch: Partial<Profile> = { continueWatching: next };
+    /* fully watched tracking at ≥92% */
+    if (duration > 0 && time / duration >= 0.92 && !activeProfile.watched.includes(channelId)) {
+      patch.watched = [...activeProfile.watched, channelId];
+    }
+    updateProfile(patch);
+  }
+
+  function markWatchedItem(item: FlixItem, watched: boolean) {
+    const ids = item.channel ? [item.channel.id] : (item.folder?.episodes.map((e) => e.channel.id) || []);
+    if (!ids.length) return;
+    const next = watched
+      ? Array.from(new Set([...activeProfile.watched, ...ids]))
+      : activeProfile.watched.filter((x) => !ids.includes(x));
+    updateProfile({ watched: next });
+    flash(watched ? 'Marked as watched' : 'Marked unwatched');
+  }
+
+  function isWatchedItem(item: FlixItem): boolean {
+    if (item.channel) return activeProfile.watched.includes(item.channel.id);
+    if (item.folder) {
+      const eps = item.folder.episodes;
+      return eps.length > 0 && eps.every((e) => activeProfile.watched.includes(e.channel.id));
+    }
+    return false;
   }
 
   function toggleFavorite(id: string) {
@@ -348,7 +560,6 @@ export default function Home() {
     if (mv.find((x) => x.id === ch.id)) return;
     const cap = mvCap();
     if (mv.length >= cap) {
-      /* device-class cap: phones decode 2 tiles fine, 6 is for iPad/desktop */
       flash(`Multiview is capped at ${cap} tiles on this device`);
       return;
     }
@@ -381,9 +592,7 @@ export default function Home() {
     selectChannel(ep.channel);
   }
 
-  /* More Like This tap → best match in the user's own playlist */
   function openSimilar(title: string) {
-    const norm = (s: string) => s.toLowerCase().replace(/\s*[(\[][^)\]]*[)\]]\)?/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
     const t = norm(title);
     if (!t) return;
     const folder = seriesFolders.find((f) => norm(f.name) === t)
@@ -399,15 +608,25 @@ export default function Home() {
   useEffect(() => {
     (async () => {
       const idx = await getDownloadIndex();
-      const m: Record<string, { pct: number; done?: boolean }> = {};
+      const m: Record<string, { pct: number; done?: boolean; failed?: string }> = {};
       for (const d of idx) m[d.id] = { pct: 100, done: true };
       setDownloads(m);
     })();
   }, []);
 
+  function onWifi(): boolean {
+    if (!settings.wifiOnly) return true;
+    const conn = (navigator as any).connection;
+    if (!conn) return true; /* can't tell — allow */
+    if (conn.type && /wifi|ethernet/i.test(conn.type)) return true;
+    if (conn.type && /cellular/i.test(conn.type)) return false;
+    return true;
+  }
+
   async function startDownload(ch: Channel) {
     if (downloads[ch.id]?.done || dlAbort.current[ch.id]) { flash('Already saved offline'); return; }
     if (!canDownload(ch.url)) { flash('Only direct files (mp4/mkv…) can be saved offline'); return; }
+    if (!onWifi()) { flash('Wi-Fi only is on — connect to Wi-Fi to download'); return; }
     const ac = new AbortController();
     dlAbort.current[ch.id] = ac;
     setDownloads((m) => ({ ...m, [ch.id]: { pct: 0 } }));
@@ -416,8 +635,12 @@ export default function Home() {
       setDownloads((m) => ({ ...m, [ch.id]: { pct: 100, done: true } }));
       flash('Saved for offline');
     } catch (e: any) {
-      setDownloads((m) => { const { [ch.id]: _drop, ...rest } = m; return rest; });
-      if (e?.name !== 'AbortError') flash(e?.message || 'Download failed');
+      if (e?.name === 'AbortError') {
+        setDownloads((m) => { const { [ch.id]: _drop, ...rest } = m; return rest; });
+      } else {
+        setDownloads((m) => ({ ...m, [ch.id]: { pct: 0, failed: e?.message || 'Download failed' } }));
+        flash(e?.message || 'Download failed');
+      }
     } finally {
       delete dlAbort.current[ch.id];
     }
@@ -427,10 +650,8 @@ export default function Home() {
   const channels = playlist?.channels || [];
   const favorites = activeProfile.favorites;
   const hiddenGroups = activeProfile.hiddenGroups;
-  const renamed = activeProfile.renamed;
 
   const allGroups = useMemo(() => Array.from(new Set(channels.flatMap((c) => c.groups || [c.group || 'Uncategorized']))), [channels]);
-
   const groupCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const c of channels) for (const g of (c.groups || [c.group || 'Uncategorized'])) counts[g] = (counts[g] || 0) + 1;
@@ -438,9 +659,9 @@ export default function Home() {
   }, [channels]);
 
   const groups = useMemo(() => {
-    const visible = allGroups.filter((g) => !hiddenGroups.includes(g));
+    const vis = allGroups.filter((g) => !hiddenGroups.includes(g));
     const order = activeProfile.groupOrder;
-    return [...visible].sort((a, b) => {
+    return [...vis].sort((a, b) => {
       const ia = order.indexOf(a), ib = order.indexOf(b);
       const ra = ia === -1 ? Infinity : ia, rb = ib === -1 ? Infinity : ib;
       return ra !== rb ? ra - rb : (groupCounts[b] || 0) - (groupCounts[a] || 0);
@@ -455,6 +676,9 @@ export default function Home() {
   const watchlistChannels = useMemo(
     () => (activeProfile.watchlist || []).map((id) => channels.find((c) => c.id === id)).filter(Boolean) as Channel[],
     [activeProfile.watchlist, channels]);
+  const watchedChannels = useMemo(
+    () => activeProfile.watched.map((id) => channels.find((c) => c.id === id)).filter(Boolean) as Channel[],
+    [activeProfile.watched, channels]);
 
   const topChannels = useMemo(() => {
     const counts = activeProfile.playCounts || {};
@@ -465,23 +689,20 @@ export default function Home() {
       .slice(0, 10) as Channel[];
   }, [activeProfile.playCounts, channels]);
 
-  const liveList = useMemo(() => {
-    const g = liveGroupPick;
-    let list = liveChannels;
-    if (g !== 'all') list = list.filter((c) => (c.groups || [c.group || 'Uncategorized']).includes(g));
-    if (liveFilter) list = list.filter((c) => c.name.toLowerCase().includes(liveFilter.toLowerCase()));
-    return list;
-  }, [liveChannels, liveGroupPick, liveFilter]);
+  /* recently added: last imports first */
+  const recentlyAdded = useMemo(() => [...movieChannels].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).slice(0, 14), [movieChannels]);
 
-  /* live TV zapping: previous/next channel inside the current live list */
+  const zapList = useMemo(() => [...liveChannels].sort((a, b) =>
+    (a.channelNumber ?? 1e9) - (b.channelNumber ?? 1e9) || a.name.localeCompare(b.name)), [liveChannels]);
+
   const zapChannel = useCallback((dir: 1 | -1) => {
     if (!selected) return;
     const type = selected.channel.contentType;
     if (type && type !== 'LIVE') return;
-    const idx = liveList.findIndex((c) => c.id === selected.channel.id);
-    if (idx === -1 || liveList.length < 2) return;
-    selectChannel(liveList[(idx + dir + liveList.length) % liveList.length]);
-  }, [selected, liveList, selectChannel]);
+    const idx = zapList.findIndex((c) => c.id === selected.channel.id);
+    if (idx === -1 || zapList.length < 2) return;
+    selectChannel(zapList[(idx + dir + zapList.length) % zapList.length]);
+  }, [selected, zapList, selectChannel]);
 
   const continueEntries = useMemo(() =>
     [...activeProfile.continueWatching]
@@ -497,6 +718,40 @@ export default function Home() {
   const recentChannels = useMemo(() =>
     activeProfile.recents.map((id) => channels.find((c) => c.id === id)).filter(Boolean).slice(0, 14) as Channel[],
   [activeProfile.recents, channels]);
+
+  /* ---------- TMDb front-page rails (trending / popular / top rated) ---------- */
+  useEffect(() => {
+    let gone = false;
+    (async () => {
+      const kinds: ['trending' | 'popular' | 'top_rated', 'movie' | 'tv'][] = [
+        ['trending', 'movie'], ['popular', 'movie'], ['top_rated', 'movie'], ['trending', 'tv'],
+      ];
+      for (const [kind, type] of kinds) {
+        const list = await getTmdbList(kind, type, tmdbKey);
+        if (gone) return;
+        setTmdbLists((prev) => ({ ...prev, [`${kind}:${type}`]: list }));
+      }
+    })();
+    return () => { gone = true; };
+  }, [tmdbKey]);
+
+  /* Match a TMDb shelf against the user's own library (fallback: play counts) */
+  const tmdbRail = useCallback((kind: 'trending' | 'popular' | 'top_rated', type: 'movie' | 'tv'): Channel[] => {
+    const list = tmdbLists[`${kind}:${type}`];
+    if (!list?.length) return [];
+    const pool = type === 'movie' ? movieChannels : [...seriesFolders.flatMap((f) => f.episodes.map((e) => ({ ...e.channel, seriesName: f.name, poster: f.tmdbPosterUrl || f.posterUrl })))];
+    const byName = new Map<string, any>();
+    for (const c of pool) byName.set(norm((c as any).seriesName || c.name), c);
+    const out: Channel[] = [];
+    const seen = new Set<string>();
+    for (const item of list) {
+      const key = norm(item.title);
+      const hit = byName.get(key);
+      if (hit && !seen.has(hit.id)) { seen.add(hit.id); out.push(hit); }
+      if (out.length >= 14) break;
+    }
+    return out;
+  }, [tmdbLists, movieChannels, seriesFolders]);
 
   /* ---------- hero slides ---------- */
   const heroSlides = useMemo<HeroSlide[]>(() => {
@@ -517,7 +772,6 @@ export default function Home() {
     return out.slice(0, 5);
   }, [continueEntries, seriesFolders, movieChannels, liveChannels]);
 
-  /* fetch meta for flix-style hero slides */
   const heroKey = heroSlides.map((s) => s.kind === 'live' ? s.ch?.id : (s.folder?.name || s.ch?.name)).join('|');
   useEffect(() => {
     let gone = false;
@@ -537,16 +791,29 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [heroKey]);
 
-  /* opened player context */
+  /* live related rail for the player */
+  const relatedChannels = useMemo(() => {
+    if (!selected) return [];
+    const c = selected.channel;
+    if (c.contentType === 'MOVIE' || c.contentType === 'SERIES') return [];
+    const groups = new Set(c.groups || [c.group || '']);
+    return liveChannels
+      .filter((x) => x.id !== c.id && (x.groups || [x.group || '']).some((g) => groups.has(g)))
+      .sort((a, b) => (a.channelNumber ?? 1e9) - (b.channelNumber ?? 1e9))
+      .slice(0, 14);
+  }, [selected, liveChannels]);
+
   const nowNext = useMemo(() => {
     if (!selected) return undefined;
     const progs = epgFor(selected.channel);
     if (!progs?.length) return { now: undefined, upcoming: [] as Program[] };
-    const now = nowProgram(progs);
-    const nowEnd = now ? parseXmltvDate(now.stop) : new Date(0);
-    const upcoming = progs.filter((p) => parseXmltvDate(p.start) >= nowEnd).slice(0, 12);
+    const now = nowProgram(progs, guideOffsetMinutes);
+    const nowEnd = now ? progWindow(now, guideOffsetMinutes).stop : new Date(0).getTime();
+    const upcoming = progs
+      .filter((p) => progWindow(p, guideOffsetMinutes).start >= nowEnd)
+      .slice(0, 12);
     return { now, upcoming };
-  }, [selected, epgFor]);
+  }, [selected, epgFor, guideOffsetMinutes]);
 
   const playerEpisodes = useMemo(() => {
     if (!selected?.channel || selected.channel.contentType !== 'SERIES') return undefined;
@@ -554,26 +821,69 @@ export default function Home() {
     return folder?.episodes;
   }, [selected, seriesFolders]);
 
+  /* flix items */
+  const movieItems = useMemo<FlixItem[]>(() => {
+    const resume = new Map(continueEntries.map((e) => [e.ch.id, e.pct]));
+    return movieChannels.map((ch) => {
+      const m = meta[`movie:${ch.name}`];
+      return {
+        key: ch.id,
+        title: ch.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, ''),
+        poster: ch.logo,
+        quality: ch.qualityTag,
+        channel: ch,
+        rating: m?.vote_average || undefined,
+        year: m?.release_date?.slice(0, 4),
+        resumePct: resume.get(ch.id),
+      };
+    });
+  }, [movieChannels, meta, continueEntries]);
+
+  const seriesItems = useMemo<FlixItem[]>(() => {
+    return seriesFolders.map((f) => {
+      const m = meta[`tv:${f.name}`];
+      const first = f.episodes[0]?.channel;
+      return {
+        key: f.name,
+        title: f.name,
+        poster: f.tmdbPosterUrl || f.posterUrl,
+        folder: f,
+        rating: m?.vote_average || undefined,
+        year: m?.first_air_date?.slice(0, 4),
+        resumePct: first ? continueEntries.find((e) => e.ch.id === first.id)?.pct : undefined,
+      };
+    });
+  }, [seriesFolders, meta, continueEntries]);
+
+  const movieCategories = useMemo(
+    () => buildFlixCategories(Array.from(new Set(movieChannels.flatMap((c) => c.groups || [c.group || '']))), hiddenGroups),
+    [movieChannels, hiddenGroups]);
+  const seriesCategories = useMemo(
+    () => buildFlixCategories(Array.from(new Set(seriesChannels.flatMap((c) => c.groups || [c.group || '']))), hiddenGroups),
+    [seriesChannels, hiddenGroups]);
+
   const tabTitle: Record<Tab, string> = { home: 'Home', live: 'Live TV', series: 'Series', movies: 'Films', guide: 'Guide' };
 
-  /* watchlist key for the open detail sheet (series → first episode's channel) */
   const detailId = detail?.channel?.id || (detail?.folder ? detail.folder.episodes[0]?.channel.id : undefined);
 
   return (
     <div className="min-h-dvh bg-ground">
       {/* Top mini bar */}
       <header className="fixed top-0 inset-x-0 z-30 ios-blur">
-        <div className="max-w-2xl mx-auto px-3 pt-[calc(6px+var(--safe-t,0px))] pb-2 flex items-center gap-1 hairline-b">
+        <div className="max-w-6xl mx-auto px-3 pt-[calc(6px+var(--safe-t,0px))] pb-2 flex items-center gap-1 hairline-b">
           <button onClick={() => setShowProfiles(true)} className="press w-9 h-9 rounded-full bg-gradient-to-br from-accent to-berry flex items-center justify-center text-[15px] font-bold text-black">
-            {activeProfile?.name.slice(0, 1).toUpperCase()}
+            {activeProfile?.guest ? '👤' : activeProfile?.name.slice(0, 1).toUpperCase()}
           </button>
-          <div className="flex-1 text-center text-[16px] font-semibold truncate">{tabTitle[tab]}</div>
+          <div className="flex-1 text-center text-[16px] font-semibold truncate">
+            {tabTitle[tab]}
+            {activeProfile?.kids && <span className="ml-1.5 text-[10px] font-bold bg-green-500/20 text-green-400 rounded px-1.5 py-0.5 align-middle">KIDS</span>}
+          </div>
           <button onClick={() => setShowSearch(true)} className="press p-2 text-white/80" aria-label="Search"><IconSearch className="w-6 h-6" /></button>
           <button onClick={() => setShowSettings(true)} className="press p-2 text-white/80" aria-label="Settings"><IconSettings className="w-6 h-6" /></button>
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto pt-[calc(50px+var(--safe-t,0px))] pb-[calc(72px+var(--safe-b,0px))]">
+      <main className="max-w-6xl mx-auto pt-[calc(50px+var(--safe-t,0px))] pb-[calc(72px+var(--safe-b,0px))]">
         {!playlist && (
           importing ? (
             <Skeletons />
@@ -606,7 +916,7 @@ export default function Home() {
                     if (s.kind === 'movie' && s.ch) openDetail('movie', s.ch.name, { channel: s.ch });
                   }} />
 
-                <GenreStrip groups={groups.slice(0, 12)} counts={groupCounts} onPick={(g) => { setLiveGroupPick(g); setTab('live'); }} />
+                <GenreStrip groups={groups.slice(0, 12)} counts={groupCounts} onPick={(g) => { setTab('live'); }} />
 
                 {continueEntries.length > 0 && (
                   <Shelf title="Continue watching">
@@ -618,8 +928,45 @@ export default function Home() {
                   </Shelf>
                 )}
 
+                {(() => {
+                  const rail = tmdbRail('trending', 'movie');
+                  if (!rail.length) return null;
+                  return (
+                    <Shelf title="Trending now">
+                      {rail.map((ch) => (
+                        <PosterCard key={ch.id} poster={ch.logo} title={ch.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')} onClick={() => openDetail('movie', ch.name, { channel: ch })} />
+                      ))}
+                    </Shelf>
+                  );
+                })()}
+                {(() => {
+                  const rail = tmdbRail('top_rated', 'movie');
+                  if (!rail.length) return null;
+                  return (
+                    <Shelf title="Top rated">
+                      {rail.map((ch) => (
+                        <PosterCard key={ch.id} poster={ch.logo} title={ch.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')} onClick={() => openDetail('movie', ch.name, { channel: ch })} />
+                      ))}
+                    </Shelf>
+                  );
+                })()}
+                {(() => {
+                  const rail = tmdbRail('trending', 'tv');
+                  if (!rail.length) return null;
+                  return (
+                    <Shelf title="Trending series">
+                      {rail.map((ch: any) => (
+                        <PosterCard key={ch.id} poster={ch.poster || ch.logo} title={ch.seriesName || ch.name} onClick={() => {
+                          const f = seriesFolders.find((f) => f.episodes.some((x) => x.channel.id === ch.id));
+                          if (f) openDetail('series', f.name, { folder: f });
+                        }} />
+                      ))}
+                    </Shelf>
+                  );
+                })()}
+
                 {topChannels.length >= 3 && (
-                  <Shelf title="Top 10">
+                  <Shelf title="Top 10 in your library">
                     {topChannels.map((ch, i) => (
                       <PosterCard key={ch.id} rank={i + 1}
                         poster={ch.logo}
@@ -635,6 +982,24 @@ export default function Home() {
                   </Shelf>
                 )}
 
+                {recentlyAdded.length > 0 && (
+                  <Shelf title="Recently added">
+                    {recentlyAdded.map((ch) => (
+                      <PosterCard key={ch.id} poster={ch.logo} title={ch.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')} onClick={() => openDetail('movie', ch.name, { channel: ch })} />
+                    ))}
+                  </Shelf>
+                )}
+
+                {watchedChannels.length > 0 && (
+                  <Shelf title="Watched">
+                    {watchedChannels.slice(0, 20).map((ch) => (
+                      ch.contentType === 'SERIES'
+                        ? <PosterCard key={ch.id} poster={ch.logo} title={ch.name} onClick={() => { const f = seriesFolders.find((f) => f.episodes.some((x) => x.channel.id === ch.id)); if (f) openDetail('series', f.name, { folder: f }); }} />
+                        : <PosterCard key={ch.id} poster={ch.logo} title={ch.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')} onClick={() => selectChannel(ch)} />
+                    ))}
+                  </Shelf>
+                )}
+
                 {favoriteChannels.length > 0 && (
                   <Shelf title="Favourites">
                     {favoriteChannels.slice(0, 20).map((ch) => (
@@ -646,7 +1011,7 @@ export default function Home() {
                 )}
 
                 {watchlistChannels.length > 0 && (
-                  <Shelf title="Watchlist">
+                  <Shelf title="My List">
                     {watchlistChannels.slice(0, 20).map((ch) => (
                       ch.contentType === 'MOVIE' || ch.contentType === 'SERIES'
                         ? <PosterCard key={ch.id} poster={ch.logo} title={ch.name}
@@ -674,7 +1039,7 @@ export default function Home() {
                   const list = liveChannels.filter((c) => (c.groups || [c.group || 'Uncategorized']).includes(g)).slice(0, 14);
                   if (!list.length) return null;
                   return (
-                    <Shelf key={g} title={renamed[g] || g} onSeeAll={() => { setLiveGroupPick(g); setTab('live'); }}>
+                    <Shelf key={g} title={activeProfile.renamed[g] || g} onSeeAll={() => setTab('live')}>
                       {list.map((ch) => <LiveTile key={ch.id} ch={ch} onClick={() => selectChannel(ch)} />)}
                     </Shelf>
                   );
@@ -701,32 +1066,71 @@ export default function Home() {
 
                 <div className="px-4 mt-8 mb-2 text-[11px] text-white/25">
                   {playlist.channels.length.toLocaleString()} items · imported {new Date(playlist.importedAt).toLocaleDateString()}
+                  {epgInfo.programmeCount > 0 && ` · guide: ${epgInfo.programmeCount.toLocaleString()} programmes`}
                 </div>
               </>
             )}
 
             {tab === 'live' && (
-              <LiveTab list={liveList} groups={groups} group={liveGroupPick} setGroup={setLiveGroupPick}
-                filter={liveFilter} setFilter={setLiveFilter} visibleCount={visible.live}
-                loadMore={() => setVisible((v) => ({ ...v, live: v.live + 240 }))}
-                epgFor={epgFor} renamed={renamed} favorites={new Set(favorites)} toggleFav={toggleFavorite}
-                onPlay={selectChannel} grid={gridView} setGrid={setGridView} />
+              <LivetvScreen
+                channels={liveChannels}
+                profile={activeProfile}
+                updateProfile={updateProfile}
+                epgFor={epgFor}
+                guideOffsetMinutes={guideOffsetMinutes}
+                density={settings.liveDensity}
+                startFolder={settings.startFolder}
+                defaultSort={settings.defaultSort}
+                resumeMap={resumeMap}
+                onPlay={(ch) => selectChannel(ch)}
+                onCatchup={(ch, prog) => {
+                  const url = buildCatchupUrl(ch, prog);
+                  if (url) selectChannel({ ...ch, url }, 0, true);
+                  else selectChannel(ch);
+                }}
+                flash={flash}
+              />
             )}
 
             {tab === 'series' && (
-              <GridTab items={seriesFolders} kind="series" visibleCount={visible.series}
-                loadMore={() => setVisible((v) => ({ ...v, series: v.series + 120 }))}
-                onOpen={(f: SeriesFolder) => openDetail('series', f.name, { folder: f })} />
+              <FlixScreen kind="series" items={seriesItems} categories={seriesCategories}
+                profile={activeProfile} updateProfile={updateProfile} settings={settings} downloads={downloads}
+                onPlayItem={(it) => it.folder && it.folder.episodes[0] && selectChannel(it.folder.episodes[0].channel)}
+                onInfo={(it) => it.folder && openDetail('series', it.folder.name, { folder: it.folder })}
+                isWatched={isWatchedItem}
+                onMarkWatched={markWatchedItem}
+                onRemoveContinue={(it) => {
+                  const ids = it.folder ? it.folder.episodes.map((e) => e.channel.id) : it.channel ? [it.channel.id] : [];
+                  updateProfile({ continueWatching: activeProfile.continueWatching.filter((c) => !ids.includes(c.channelId)) });
+                  flash('Removed from Continue Watching');
+                }}
+                onRenameCategory={(g, n) => updateProfile({ renamed: { ...activeProfile.renamed, [g]: n } })}
+                onHideCategory={(g) => { updateProfile({ hiddenGroups: [...hiddenGroups, g] }); flash(`Hidden “${g}”`); }}
+                flash={flash}
+              />
             )}
 
             {tab === 'movies' && (
-              <GridTab items={movieChannels} kind="movie" visibleCount={visible.movies}
-                loadMore={() => setVisible((v) => ({ ...v, movies: v.movies + 90 }))}
-                onOpen={(ch: Channel) => openDetail('movie', ch.name, { channel: ch })} />
+              <FlixScreen kind="movie" items={movieItems} categories={movieCategories}
+                profile={activeProfile} updateProfile={updateProfile} settings={settings} downloads={downloads}
+                onPlayItem={(it) => it.channel && selectChannel(it.channel, resumeMap[it.channel.id]?.time)}
+                onInfo={(it) => it.channel && openDetail('movie', it.channel.name, { channel: it.channel })}
+                onDownload={startDownload}
+                isWatched={isWatchedItem}
+                onMarkWatched={markWatchedItem}
+                onRemoveContinue={(it) => {
+                  if (!it.channel) return;
+                  updateProfile({ continueWatching: activeProfile.continueWatching.filter((c) => c.channelId !== it.channel!.id) });
+                  flash('Removed from Continue Watching');
+                }}
+                onRenameCategory={(g, n) => updateProfile({ renamed: { ...activeProfile.renamed, [g]: n } })}
+                onHideCategory={(g) => { updateProfile({ hiddenGroups: [...hiddenGroups, g] }); flash(`Hidden “${g}”`); }}
+                flash={flash}
+              />
             )}
 
             {tab === 'guide' && (
-              <GuideGrid channels={liveList.slice(0, visible.guide)} epgFor={epgFor}
+              <GuideGrid channels={liveChannels.slice(0, visible.guide)} epgFor={epgFor}
                 onPlay={selectChannel}
                 onCatchup={(ch: Channel, prog: Program) => {
                   const url = buildCatchupUrl(ch, prog);
@@ -734,7 +1138,8 @@ export default function Home() {
                   else selectChannel(ch);
                 }}
                 loadMore={() => setVisible((v) => ({ ...v, guide: v.guide + 120 }))}
-                total={liveList.length} />
+                total={liveChannels.length}
+                offsetMinutes={guideOffsetMinutes} />
             )}
           </div>
         )}
@@ -742,7 +1147,7 @@ export default function Home() {
 
       {/* Tab bar */}
       <nav className="fixed bottom-0 inset-x-0 z-30 ios-blur hairline-t">
-        <div className="flex justify-around max-w-2xl mx-auto" style={{ paddingBottom: 'var(--safe-b, 0px)' }}>
+        <div className="flex justify-around max-w-6xl mx-auto" style={{ paddingBottom: 'var(--safe-b, 0px)' }}>
           {([['home', 'Home', IconHome], ['live', 'Live TV', IconLive], ['series', 'Series', IconSeries], ['movies', 'Films', IconMovie], ['guide', 'Guide', IconGuide]] as [Tab, string, any][]).map(([t, title, Icon]) => (
             <button key={t} onClick={() => setTab(t)} className="press flex flex-col items-center justify-center w-16 h-[56px]">
               <Icon className={`w-[22px] h-[22px] ${tab === t ? 'text-accent' : 'text-white/55'}`} />
@@ -762,12 +1167,19 @@ export default function Home() {
           nowNext={nowNext}
           episodes={playerEpisodes}
           meta={selected.channel.contentType === 'MOVIE' ? meta[`movie:${selected.channel.name}`] : meta[`tv:${selected.channel.name}`]}
+          appSettings={settings}
+          zapList={zapList}
+          onSelectChannel={(ch) => selectChannel(ch)}
+          recents={recentChannels}
+          favourites={favoriteChannels}
           onClose={() => setSelected(null)}
           onToggleFav={() => toggleFavorite(selected.channel.id)}
           onAddMv={() => addToMv(selected.channel)}
           onProgress={onProgress}
           onPlayEpisode={(ep) => selectChannel(ep.channel)}
           onZap={zapChannel}
+          related={relatedChannels}
+          onPlayRelated={(ch) => selectChannel(ch)}
         />
       )}
 
@@ -798,10 +1210,13 @@ export default function Home() {
       )}
 
       <SettingsSheet open={showSettings} onClose={() => setShowSettings(false)}
-        playlist={playlist} groups={groups} allGroups={allGroups} hiddenCount={hiddenGroups.length}
+        playlist={playlist}
+        playlists={playlistIndex} activePlaylistId={activePlaylistId}
+        onSelectPlaylist={switchPlaylist} onDeletePlaylist={deletePlaylist}
+        groups={groups} allGroups={allGroups} hiddenCount={hiddenGroups.length}
         tmdbKey={tmdbKey} setTmdbKey={setTmdbKey} status={status}
         canRefresh={canRefresh} refreshing={refreshing} refreshProgress={importProgress}
-        onRefreshPlaylist={refreshPlaylist}
+        onRefreshPlaylist={doRefreshPlaylist}
         hideGroup={(g) => { updateProfile({ hiddenGroups: [...hiddenGroups, g] }); flash(`Hidden “${g}”`); }}
         renameGroup={(g, n) => updateProfile({ renamed: { ...activeProfile.renamed, [g]: n } })}
         reorderGroup={(g, dir) => {
@@ -823,20 +1238,45 @@ export default function Home() {
         allChannels={channels}
         onOpenImport={() => { setShowSettings(false); setShowImport(true); }}
         onOpenProfiles={() => setShowProfiles(true)}
-        onExportData={exportData} onImportData={importData}
-        onClearPlaylist={doClearPlaylist}
-        isStandalone={isStandalone} playbackCount={continueEntries.length} mvCount={mv.length} />
+        onExportData={exportData}
+        onRestoreData={restoreData}
+        hasRestoreSnapshot={hasRestoreSnapshot}
+        onUndoRestore={undoRestore}
+        onClearPlaylist={async () => { await clearPlaylistStore(); await idbDel(`pl:${activePlaylistId}`); setPlaylist(null); setPlaylistIndex((ix) => ix.filter((x) => x.id !== activePlaylistId)); save('playlistIndex', playlistIndex.filter((x) => x.id !== activePlaylistId)); flash('Playlist removed'); }}
+        isStandalone={isStandalone} playbackCount={continueEntries.length} mvCount={mv.length}
+        settings={settings} setSettings={setSettings}
+        epgInfo={{ ...epgInfo, url: playlist?.epgUrl || '' }}
+        onSetEpgUrl={(url) => { if (playlist) { const pl = { ...playlist, epgUrl: url || undefined }; setPlaylist(pl); idbSet(`pl:${activePlaylistId}`, pl); if (url) loadEpg(url); } }}
+        onRefreshEpg={() => { if (playlist?.epgUrl) loadEpg(playlist.epgUrl); else flash('No guide URL set'); }}
+        onImportEpgFile={async (file) => {
+          const text = await file.text();
+          const parsed = parseXMLTV(text);
+          setEpg(parsed);
+          setEpgInfo({ programmeCount: Object.values(parsed).reduce((n, p) => n + p.length, 0), channelCount: Object.keys(parsed).length, lastRefresh: Date.now(), loading: 0 });
+          flash('Guide imported from file');
+        }}
+        onClearAllData={clearAllData}
+        onCheckUpdates={checkForUpdates}
+      />
 
       <ProfilesSheet open={showProfiles} onClose={() => setShowProfiles(false)} profiles={profiles} activeId={activeProfileId}
         onPick={pickProfile}
-        onAdd={(name) => { if (!name) return; const p = { ...DEFAULT_PROFILE, id: `p_${Date.now()}`, name }; setProfiles((prev) => [...prev, p]); flash(`Profile “${name}” added`); }}
-        onSetPin={(pid, pin) => setProfiles((prev) => prev.map((p) => (p.id === pid ? { ...p, pin: pin || undefined } : p)))}
-        onDelete={(pid) => setProfiles((prev) => (prev.length > 1 ? prev.filter((p) => p.id !== pid) : prev))} />
+        onAdd={(name, kids) => { if (!name) return; const p = { ...DEFAULT_PROFILE, id: `p_${Date.now()}`, name, kids }; setProfiles((prev) => [...prev, p]); flash(`Profile “${name}” added`); }}
+        onSetPin={(pid, pin) => setProfiles((prev) => prev.map((p) => (p.id === pid ? { ...p, pin: pin ? hashPin(pin) : undefined } : p)))}
+        onToggleKids={(pid) => setProfiles((prev) => prev.map((p) => (p.id === pid ? { ...p, kids: !p.kids } : p)))}
+        onRename={(pid, name) => setProfiles((prev) => prev.map((p) => (p.id === pid ? { ...p, name } : p)))}
+        onDelete={(pid) => setProfiles((prev) => (prev.length > 2 ? prev.filter((p) => p.id !== pid) : prev))} />
 
-      {showPin && <PinOverlay profile={showPin.profile} onResolve={showPin.resolve} onCancel={() => showPin.resolve(false)} />}
+      {showPin && <PinOverlay profile={showPin.profile} verify={(pin) => hashPin(pin) === showPin.profile.pin} onResolve={showPin.resolve} onCancel={() => showPin.resolve(false)} />}
+      {coldPin && !showPin && (
+        <PinOverlay profile={coldPin} verify={(pin) => hashPin(pin) === coldPin.pin}
+          onResolve={(ok) => { if (!ok) location.reload(); setColdPin(null); }}
+          onCancel={() => location.reload()} />
+      )}
 
       {showSearch && (
         <SearchOverlay channels={channels} series={seriesFolders} favorites={new Set(favorites)}
+          epgFor={epgFor} guideOffsetMinutes={guideOffsetMinutes}
           onClose={() => setShowSearch(false)} onPlayChannel={(c) => { setShowSearch(false); selectChannel(c); }}
           onOpenSeries={(f) => { setShowSearch(false); openDetail('series', f.name, { folder: f }); }}
           onOpenMovie={(c) => { setShowSearch(false); openDetail('movie', c.name, { channel: c }); }} />
@@ -859,101 +1299,3 @@ export default function Home() {
     </div>
   );
 }
-
-/* ================= Live tab ================= */
-
-function LiveTab({ list, groups, group, setGroup, filter, setFilter, visibleCount, loadMore, epgFor, renamed, favorites, toggleFav, onPlay, grid, setGrid }: any) {
-  const now = Date.now();
-  return (
-    <div>
-      <div className="scroll-x flex gap-2 px-4 py-2.5">
-        <Chip label="All" active={group === 'all'} onClick={() => setGroup('all')} />
-        {groups.map((g: string) => <Chip key={g} label={renamed[g] || g} active={group === g} onClick={() => setGroup(g)} />)}
-      </div>
-      <div className="px-4 pb-2 flex gap-2 items-center">
-        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter channels"
-          className="flex-1 bg-white/8 rounded-xl px-3.5 py-2.5 text-[16px] outline-none placeholder:text-white/30" />
-        <button onClick={() => setGrid(!grid)} className="press bg-white/8 rounded-xl px-3 py-2.5 text-[13px] font-semibold text-white/80">{grid ? '▦ List' : '▥ Grid'}</button>
-      </div>
-
-      {grid ? (
-        <div className="grid grid-cols-3 gap-3 px-4 py-1 md:grid-cols-4">
-          {list.slice(0, visibleCount).map((ch: Channel) => <LiveTile key={ch.id} ch={ch} onClick={() => onPlay(ch)} />)}
-        </div>
-      ) : (
-        <div className="ios-card mx-4 divide-y divide-white/5">
-          {list.slice(0, visibleCount).map((ch: Channel) => {
-            const progs = epgFor(ch);
-            const nowP = progs?.find((p2: Program) => {
-              const s = parseXmltvDate(p2.start).getTime(), e = parseXmltvDate(p2.stop).getTime();
-              return s <= now && now < e;
-            });
-            return (
-              <div key={ch.id} className="flex items-center gap-3 px-3 py-2.5 hairline-b last:border-0">
-                <button onClick={() => onPlay(ch)} className="press flex items-center gap-3 flex-1 min-w-0 text-left">
-                  <Poster src={ch.logo} className="w-10 h-10 rounded-lg shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[15px] truncate flex items-center gap-1.5">
-                      <span className="truncate font-medium">{ch.name}</span>
-                      {ch.qualityTag && <span className="text-[10px] text-white/40 shrink-0">{ch.qualityTag}</span>}
-                    </div>
-                    {nowP ? (
-                      <div className="text-[11px] text-white/45 truncate mt-0.5">Now: {nowP.title}</div>
-                    ) : (
-                      <div className="text-[11px] text-white/35 truncate mt-0.5">{(ch.groups || [ch.group]).join(' · ')}</div>
-                    )}
-                  </div>
-                </button>
-                <button onClick={() => toggleFav(ch.id)} className={`press p-2 ${favorites.has(ch.id) ? 'text-accent' : 'text-white/25'}`}>
-                  <IconStar filled={favorites.has(ch.id)} className="w-5 h-5" />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {list.length > visibleCount && (
-        <div className="py-3 text-center">
-          <button onClick={loadMore} className="press text-[14px] text-link">Show more ({(list.length - visibleCount).toLocaleString()} left)</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ================= Films/Series grid tab ================= */
-
-function GridTab({ items, kind, visibleCount, loadMore, onOpen, favSet }: any) {
-  return (
-    <div>
-      <div className="grid grid-cols-3 gap-3 px-4 py-2 md:grid-cols-4">
-        {items.slice(0, visibleCount).map((it: any) => (
-          kind === 'series' ? (
-            <button key={it.name} onClick={() => onOpen(it)} className="press text-left" title={it.name}>
-              <div className="rounded-xl overflow-hidden" style={{ aspectRatio: '2/3' }}>
-                <Poster src={it.tmdbPosterUrl || it.posterUrl} label={it.name} className="w-full h-full" />
-              </div>
-              <div className="mt-1.5 text-[12px] font-semibold truncate">{it.name}</div>
-              <div className="text-[10px] text-white/35">{it.episodeCount} eps</div>
-            </button>
-          ) : (
-            <button key={it.id} onClick={() => onOpen(it)} className="press text-left" title={it.name}>
-              <div className="rounded-xl overflow-hidden" style={{ aspectRatio: '2/3' }}>
-                <Poster src={it.logo} label={it.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')} className="w-full h-full" />
-                {it.qualityTag && <div className="absolute bottom-1 left-1 text-[9px] font-bold bg-black/60 px-1 rounded">vod</div>}
-              </div>
-              <div className="mt-1.5 text-[12px] font-semibold truncate">{it.name.replace(/\s*[(\[][^)\]]*[)\]]\)?$/, '')}</div>
-            </button>
-          )
-        ))}
-      </div>
-      {items.length > visibleCount && (
-        <div className="py-3 text-center">
-          <button onClick={loadMore} className="press text-[14px] text-link">Show more ({(items.length - visibleCount).toLocaleString()} left)</button>
-        </div>
-      )}
-    </div>
-  );
-}
-
