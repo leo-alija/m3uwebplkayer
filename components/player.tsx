@@ -844,14 +844,17 @@ export default function Player(p: Props) {
     setHoldStep(10);
   }
   /* ---------- live edge ---------- */
-  /* hls.js knows its sync position; native HLS falls back to the end of the
-     sliding window */
+  /* hls.js knows its sync position; native HLS (iPhones < 17.1) reports
+     duration = Infinity for live, so the edge comes from the end of the
+     seekable range instead */
   function liveEdge(): number {
     const v = videoRef.current;
     if (!v) return NaN;
     const h = hlsRef.current;
     const edge = h && h.liveSyncPosition != null && Number.isFinite(h.liveSyncPosition) ? h.liveSyncPosition
-      : Number.isFinite(v.duration) && v.duration > 0 ? v.duration - 0.5 : NaN;
+      : Number.isFinite(v.duration) && v.duration > 0 ? v.duration - 0.5
+      : v.seekable.length ? v.seekable.end(v.seekable.length - 1)
+      : NaN;
     return edge as number;
   }
 

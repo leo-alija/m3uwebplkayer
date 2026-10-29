@@ -17,10 +17,14 @@ describe('rewriteManifest', () => {
     expect(out).toContain(`URI="/api/fetch?url=${encodeURIComponent('https://cdn.other/init.mp4')}&bin=1"`);
   });
 
-  it('prefixes proxied URLs with the given origin (server-side rewriting)', () => {
-    const out = rewriteManifest('#EXTM3U\nseg_001.ts\nchunk_1.m3u8\n', base, 'https://app.example.com');
-    expect(out).toContain(`https://app.example.com/api/fetch?url=${encodeURIComponent('http://provider.example:8080/live/user/pass/seg_001.ts')}&bin=1`);
-    expect(out).toContain(`https://app.example.com/api/fetch?url=${encodeURIComponent('http://provider.example:8080/live/user/pass/chunk_1.m3u8')}&hls=1`);
+  it('emits root-relative proxied URLs so every device resolves them against its own host', () => {
+    /* Regression: the server used to prefix its own origin, which in dev is
+       localhost even for LAN requests — iPhone playback died fetching
+       http://localhost:3000 from the phone itself. */
+    const out = rewriteManifest('#EXTM3U\nseg_001.ts\nchunk_1.m3u8\n', base);
+    expect(out).not.toMatch(/^https?:\/\/(?!provider\.example)/m);
+    expect(out).toContain(`/api/fetch?url=${encodeURIComponent('http://provider.example:8080/live/user/pass/seg_001.ts')}&bin=1`);
+    expect(out).toContain(`/api/fetch?url=${encodeURIComponent('http://provider.example:8080/live/user/pass/chunk_1.m3u8')}&hls=1`);
   });
 
   it('leaves comments and query-bearing m3u8 links without bin flag', () => {

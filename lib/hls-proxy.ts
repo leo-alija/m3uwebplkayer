@@ -13,6 +13,15 @@
    master as its source, and native HLS on older iOS plays the same proxied
    URL via video.src — no CORS, no blob-base resolution problems.
 
+   Rewritten URLs are emitted ROOT-RELATIVE (/api/fetch?...) on purpose.
+   Every player resolves them against the URL it fetched the manifest from,
+   which is always the right host/port/scheme for that device. Stamping the
+   server's own idea of the origin instead is what broke iPhone playback:
+   Next.js reports localhost in dev even for LAN requests, so a phone opening
+   http://<mac-ip>:3000 received manifests full of http://localhost:3000/...
+   URLs — desktop (genuinely localhost) worked, the phone fetched its own
+   port and got nothing.
+
    This module is shared by the browser (proxiedStreamUrl) and the route
    (rewriteManifest), so it must not touch window/DOM directly. */
 
@@ -26,7 +35,7 @@ function isHttpUrl(u: URL): boolean {
   return u.protocol === 'http:' || u.protocol === 'https:';
 }
 
-function proxied(target: string, base: URL, origin?: string): string | null {
+function proxied(target: string, base: URL): string | null {
   const t = target.trim();
   if (!t) return null;
   let abs: URL;
@@ -37,15 +46,14 @@ function proxied(target: string, base: URL, origin?: string): string | null {
   }
   if (!isHttpUrl(abs)) return null;
   const flag = isHlsTarget(abs) ? 'hls=1' : 'bin=1';
-  const rel = `/api/fetch?url=${encodeURIComponent(abs.href)}&${flag}`;
-  return origin ? origin + rel : rel;
+  return `/api/fetch?url=${encodeURIComponent(abs.href)}&${flag}`;
 }
 
 /* Rewrite one manifest level: URI="..." attributes (keys, maps, renditions)
-   and bare URL lines (variants, segments, iframes). `origin` prefixes the
-   proxied URLs when given (the server passes its own origin so native HLS
-   resolves them; the client omits it for same-document relative URLs). */
-export function rewriteManifest(text: string, originalUrl: string, origin?: string): string {
+   and bare URL lines (variants, segments, iframes). URLs come out
+   root-relative so each device resolves them against the host it actually
+   used (see the module comment). */
+export function rewriteManifest(text: string, originalUrl: string): string {
   let base: URL;
   try {
     base = new URL(originalUrl);
@@ -53,14 +61,14 @@ export function rewriteManifest(text: string, originalUrl: string, origin?: stri
     return text;
   }
   const rewritten = text.replace(/URI="([^"]*)"/g, (full, u: string) => {
-    const p = proxied(u, base, origin);
+    const p = proxied(u, base);
     return p ? `URI="${p}"` : full;
   });
   return rewritten
     .split(/\r?\n/)
     .map((line) => {
       if (!line || line.startsWith('#')) return line;
-      const p = proxied(line, base, origin);
+      const p = proxied(line, base);
       return p ?? line;
     })
     .join('\n');

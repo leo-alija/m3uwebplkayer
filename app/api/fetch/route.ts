@@ -144,9 +144,14 @@ export async function GET(req: NextRequest) {
        entirely through this proxy. Only &hls=1 requests are rewritten —
        playlist imports fetch the same endpoints without it and must get the
        untouched source text. `target` is the final redirect destination, the
-       correct base for relative URLs inside the manifest. */
+       correct base for relative URLs inside the manifest. Rewritten URLs stay
+       ROOT-RELATIVE on purpose: the server's nextUrl.origin is untrustworthy
+       (Next reports localhost in dev even for LAN requests), and every player
+       resolves relative URLs against the host it actually used — so an iPhone
+       on http://<mac-ip>:3000 and a desktop on localhost both get working
+       URLs. Do not "help" by absolutizing here. */
     if (hls && text.includes('#EXTM3U')) {
-      return new NextResponse(rewriteManifest(text, target.href, req.nextUrl.origin), {
+      return new NextResponse(rewriteManifest(text, target.href), {
         headers: {
           'Content-Type': 'application/vnd.apple.mpegurl',
           /* live playlists must never come from a cache — a stale copy repeats

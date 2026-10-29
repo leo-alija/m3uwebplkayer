@@ -61,7 +61,10 @@ describe('GET /api/fetch — request contract', () => {
 });
 
 describe('GET /api/fetch — HLS manifest rewriting', () => {
-  it('rewrites manifests on hls=1 requests to absolute proxied URLs', async () => {
+  it('rewrites manifests on hls=1 requests to root-relative proxied URLs', async () => {
+    /* Root-relative on purpose: the device that fetched the manifest resolves
+       them against its own host. Stamping nextUrl.origin emitted localhost for
+       LAN requests in dev and killed iPhone playback. */
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(textResponse(
       '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=900000\nv/hi.m3u8\n#EXTINF:10,\nseg_1.ts\n',
       { headers: { 'content-type': 'application/vnd.apple.mpegurl' } },
@@ -70,8 +73,9 @@ describe('GET /api/fetch — HLS manifest rewriting', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('application/vnd.apple.mpegurl');
     const body = await res.text();
-    expect(body).toContain(`http://localhost:3000/api/fetch?url=${encodeURIComponent('https://provider.example/live/v/hi.m3u8')}&hls=1`);
-    expect(body).toContain(`http://localhost:3000/api/fetch?url=${encodeURIComponent('https://provider.example/live/seg_1.ts')}&bin=1`);
+    expect(body).toContain(`/api/fetch?url=${encodeURIComponent('https://provider.example/live/v/hi.m3u8')}&hls=1`);
+    expect(body).toContain(`/api/fetch?url=${encodeURIComponent('https://provider.example/live/seg_1.ts')}&bin=1`);
+    expect(body).not.toMatch(/^https?:\/\/(?!provider\.example)/m);
   });
 
   it('leaves non-hls requests (playlist imports) untouched even for m3u8 content', async () => {
