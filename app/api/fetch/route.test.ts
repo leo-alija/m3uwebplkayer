@@ -44,6 +44,18 @@ describe('GET /api/fetch — request contract', () => {
     expect(await res.text()).toBe('#EXTM3U');
   });
 
+  it('forwards the requesting device User-Agent upstream (panel UA sniffing)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(textResponse('#EXTM3U'));
+    vi.stubGlobal('fetch', fetchMock);
+    await GET(req('https://example.com/list.m3u', { 'user-agent': 'iPhone UA / Safari' }));
+    const call = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect((call[1].headers as Record<string, string>)['User-Agent']).toBe('iPhone UA / Safari');
+    // no client UA at all → sane browser-like default, never the app's name
+    await GET(new NextRequest('http://localhost:3000/api/fetch?url=https%3A%2F%2Fexample.com%2Fl.m3u'));
+    const call2 = fetchMock.mock.calls[1] as [URL, RequestInit];
+    expect((call2[1].headers as Record<string, string>)['User-Agent']).toMatch(/^Mozilla\/5\.0/);
+  });
+
   it('proxies bin with header passthrough and forwards Range', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(new Uint8Array([1, 2, 3]), {

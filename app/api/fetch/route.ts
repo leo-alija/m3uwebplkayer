@@ -82,7 +82,16 @@ export async function GET(req: NextRequest) {
   if (!parseTargetUrl(url)) return blocked();
   let target = new URL(url);
 
-  const headers: Record<string, string> = { 'User-Agent': 'm3uwebplayer/1.0' };
+  /* Forward the requesting device's User-Agent instead of advertising this
+     app: IPTV panels commonly sniff UA — serving HLS only to browser/player
+     clients, 403ing unknown ones, or binding streams to the session's UA.
+     The device's own UA is also what worked when the playlist was fetched in
+     its browser, so it is the safest identity to present upstream. */
+  const headers: Record<string, string> = {
+    'User-Agent':
+      req.headers.get('user-agent')
+      || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+  };
   const range = req.headers.get('range');
   if (bin && range) headers['range'] = range;
 
