@@ -55,6 +55,14 @@ function mappedIPv4(host: string): string | null {
 
 const BLOCKED_HOSTNAMES = /^(localhost|.*\.localhost|.*\.local|.*\.internal)$/i;
 
+/* Escape hatch for self-hosted panels: Xtream boxes on the LAN
+   (192.168.x.x, *.local, localhost tunnels) are legitimate targets when the
+   app is self-hosted next to them. Setting ALLOW_PRIVATE_TARGETS=1 opts out
+   of the private-IP block — opt-in per deployment, never the default. */
+function relaxed(): boolean {
+  return process.env.ALLOW_PRIVATE_TARGETS === '1';
+}
+
 /* True when a hostname is an IP literal (v4/v6) in a blocked range, or a
    localhost-style name. Domain names pass — DNS is checked separately. */
 export function isBlockedHost(host: string): boolean {
@@ -78,7 +86,8 @@ export function parseTargetUrl(raw: string): URL | null {
     return null;
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-  if (!u.hostname || isBlockedHost(u.hostname)) return null;
+  if (!u.hostname) return null;
+  if (!relaxed() && isBlockedHost(u.hostname)) return null;
   return u;
 }
 
@@ -91,6 +100,7 @@ export async function isPubliclyResolvable(
   hostname: string,
   lookup: LookupFn = (h) => dnsLookup(h, { all: true, verbatim: true }) as any,
 ): Promise<boolean> {
+  if (relaxed()) return true; // self-hosted LAN mode: skip the private-IP checks
   if (isIpLiteral(hostname)) return !isBlockedHost(hostname); // no DNS for literals
   let addrs;
   try {
