@@ -86,13 +86,27 @@ function GlassBtn({ onClick, label, title, active, className = '', children, ...
 
 const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+/* IPTV sources blip constantly. hls.js' default playlist retry budget (1-2
+   attempts) is far too small for it — one failed playlist fetch away from a
+   fatal error. These policies retry much harder before the fatal path (which
+   runs the recovery ladder) ever fires. */
+function loadPolicy(errorRetries: number, maxLoadTimeMs = 20_000, maxTimeToFirstByteMs = 10_000) {
+  return {
+    default: {
+      maxTimeToFirstByteMs,
+      maxLoadTimeMs,
+      timeoutRetry: { maxNumRetry: 4, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+      errorRetry: { maxNumRetry: errorRetries, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+    },
+  };
+}
+
 export default function Player(p: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const contRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<HlsJs | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSave = useRef(0);
-  const recoveries = useRef(0);
   const tapTime = useRef(0);
   const tapSide = useRef('');
   const subOverlayRef = useRef<HTMLDivElement>(null);
@@ -100,7 +114,10 @@ export default function Player(p: Props) {
   const swipeDy = useRef(0);
   const scrubbingRef = useRef(false);
   const visited = useRef<string[]>([]);
-  const freezeRef = useRef({ lastTime: -1, since: 0 });
+  const freezeRef = useRef({ lastTime: -1, stuckSince: 0, stableSince: 0 });
+  /* recovery ladder budget — attempts back off and refill after steady
+     playback; hardFails counts consecutive full reloads without settling */
+  const recovery = useRef({ count: 0, lastAttempt: 0, hardFails: 0 });
   const digitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const holdStepRef = useRef(10);
@@ -141,7 +158,10 @@ export default function Player(p: Props) {
   const [switcherGroup, setSwitcherGroup] = useState('all');
   const [switcherQ, setSwitcherQ] = useState('');
   const [digits, setDigits] = useState('');
-  const [frozen, setFrozen] = useState(false);
+  const [recovering, setRecovering] = useState<string | null>(null);
+  /* bumped to force a full source teardown + re-attach (hard recovery,
+     Retry button) without changing the channel */
+  const [nonce, setNonce] = useState(0);
   const [screensaver, setScreensaver] = useState(false);
   const [holdStep, setHoldStep] = useState(10);
   const [clockStr, setClockStr] = useState('');
@@ -256,29 +276,44 @@ export default function Player(p: Props) {
     visited.current = [p.channel.id, ...visited.current.filter((x) => x !== p.channel.id)].slice(0, 6);
   }, [p.channel.id]);
 
-  /* frozen-picture detection: claims to be playing but the clock is stuck →
-     force a reconnect (stalls, dead CDNs, decoder hiccups) */
+  /* frozen-picture watchdog: the element claims to be playing but the clock
+     is stuck (starved buffer, dead CDN, decoder hiccup) → graduated recovery
+     (see beginRecovery). Steady playback refills the recovery budget, so one
+     bad patch never poisons the whole session. Skipped while the user is
+     scrubbing, paused or mid-stall during the initial load (hls.js fatal
+     errors cover the never-started case; this watches the mid-play freezes). */
   useEffect(() => {
     const t = setInterval(() => {
       const v = videoRef.current;
-      if (!v || v.paused || !playing) { freezeRef.current.since = 0; setFrozen(false); return; }
-      const now = Date.now();
-      if (Math.abs(v.currentTime - freezeRef.current.lastTime) < 0.2) {
-        if (!freezeRef.current.since) freezeRef.current.since = now;
-        else if (now - freezeRef.current.since > 8000) {
-          setFrozen(true);
-          try { v.load(); requestPlay(); } catch {}
-          freezeRef.current.since = now;
-          setTimeout(() => setFrozen(false), 4000);
-        }
-      } else {
-        freezeRef.current.since = 0;
-        setFrozen(false);
+      if (!v || v.paused || v.ended || scrubbingRef.current) {
+        freezeRef.current.stuckSince = 0;
+        return;
       }
+      const now = Date.now();
+      const advancing = Number.isFinite(v.currentTime)
+        && Math.abs(v.currentTime - freezeRef.current.lastTime) >= 0.2;
       freezeRef.current.lastTime = v.currentTime;
-    }, 2000);
+      if (advancing) {
+        freezeRef.current.stuckSince = 0;
+        if (!freezeRef.current.stableSince) freezeRef.current.stableSince = now;
+        else if (recovery.current.count && now - freezeRef.current.stableSince > 20_000) {
+          recovery.current = { count: 0, lastAttempt: 0, hardFails: 0 };
+        }
+        return;
+      }
+      freezeRef.current.stableSince = 0;
+      /* only a stall AFTER data has flowed counts — the first load is
+         guarded by hls.js/network timeouts instead */
+      if (!v.buffered.length && !v.currentTime) return;
+      if (!freezeRef.current.stuckSince) freezeRef.current.stuckSince = now;
+      else if (now - freezeRef.current.stuckSince > (live ? 5000 : 9000)) {
+        freezeRef.current.stuckSince = now;
+        beginRecovery(live ? 'Live stream stalled' : 'Playback stalled');
+      }
+    }, 1500);
     return () => clearInterval(t);
-  }, [playing]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
 
   /* screensaver: paused/frozen too long → drifting clock overlay */
   useEffect(() => {
@@ -352,7 +387,7 @@ export default function Player(p: Props) {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !p.channel || !offlineResolved) return;
-    setPlaying(false); setBuffering(true); setError(''); setTime(0); setDuration(0); setBuffered(0);
+    setPlaying(false); setBuffering(true); setError(''); setRecovering(null); setTime(0); setDuration(0); setBuffered(0);
     setLevels([]); setCurLevel(-1); setAudioTracks([]); setAudioTrack(-1); setSubTracks([]); setSubTrack(-1); setRate(1); setNextCountdown(null);
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     /* Cross-origin stream URLs point at the provider, which usually blocks
@@ -367,16 +402,25 @@ export default function Player(p: Props) {
     (async () => {
       const Hls = (await import('hls.js')).default;
       if (cancelled) return;
+      let mediaRetries = 0;
       if (isHlsUrl && wantHlsJs() && Hls.isSupported()) {
         /* switching engines on a reused <video> needs the old src dropped */
         if (video.src) { video.removeAttribute('src'); video.load(); }
-        const hls = new Hls({ enableWorker: true, lowLatencyMode: true, backBufferLength: 90 });
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 90,
+          manifestLoadPolicy: loadPolicy(3, 20_000, Infinity),
+          playlistLoadPolicy: loadPolicy(6),
+          fragLoadPolicy: loadPolicy(8, 120_000),
+        });
         hlsRef.current = hls;
-        recoveries.current = 0;
         hls.loadSource(url);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
-          recoveries.current = 0;
+          /* a freshly parsed manifest is real progress — refill the soft
+             budget; hardFails only clears after steady playback (watchdog) */
+          recovery.current.count = 0;
           setLevels(data.levels.map((l, i) => ({ i, label: l.height ? `${l.height}p` : `${Math.round((l.bitrate || 0) / 1000)}k` })));
         });
         hls.on(Hls.Events.LEVEL_SWITCHED, (_e, data) => setCurLevel(hls.autoLevelEnabled ? -1 : data.level));
@@ -418,31 +462,26 @@ export default function Player(p: Props) {
           renderSubtitles();
         });
         hls.on(Hls.Events.ERROR, (_e, data) => {
-          if (data.fatal) {
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                /* give dead networks a bounded number of retries, then fail visibly */
-                if (recoveries.current >= 6) {
-                  setError('Stream unavailable — it may be offline or blocked. Try again later.');
-                  setBuffering(false);
+          if (!data.fatal) return;
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              /* hls.js already burned its own retry budget — run the shared
+                 recovery ladder (soft startLoad first, full reload later) */
+              beginRecovery('Network error');
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              {
+                /* first media error → hls.js' own buffer reset; repeat offenders
+                   go straight to a full reload, which rebuilds the decoder */
+                if (mediaRetries++ === 0) {
+                  try { hls.recoverMediaError(); } catch { beginRecovery('Decoder error', true); }
                 } else {
-                  recoveries.current += 1;
-                  hls.startLoad();
+                  beginRecovery('Decoder error', true);
                 }
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                if (recoveries.current >= 6) {
-                  setError('This stream could not be played.');
-                  setBuffering(false);
-                } else {
-                  recoveries.current += 1;
-                  hls.recoverMediaError();
-                }
-                break;
-              default:
-                setError('This stream could not be played.');
-                setBuffering(false);
-            }
+              }
+              break;
+            default:
+              beginRecovery('Stream error', true);
           }
         });
       } else {
@@ -470,7 +509,8 @@ export default function Player(p: Props) {
     })();
 
     return () => { cancelled = true; };
-  }, [p.channel.id, offlineResolved, offlineUrl]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.channel.id, offlineResolved, offlineUrl, nonce]);
 
   /* cleanup */
   useEffect(() => () => {
@@ -569,10 +609,8 @@ export default function Player(p: Props) {
       if (Number.isFinite(v.duration)) setDuration(v.duration);
       try { if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1)); } catch {}
       if (live) {
-        const h = hlsRef.current;
-        const edge = h && h.liveSyncPosition != null && Number.isFinite(h.liveSyncPosition) ? h.liveSyncPosition
-          : Number.isFinite(v.duration) && v.duration > 0 ? v.duration - 0.5 : NaN;
-        setBehindLive(Number.isFinite(edge) ? (edge as number) - v.currentTime > 15 : false);
+        const edge = liveEdge();
+        setBehindLive(Number.isFinite(edge) ? edge - v.currentTime > 15 : false);
       }
       if (!live && Date.now() - lastSave.current > 8000) {
         lastSave.current = Date.now();
@@ -591,9 +629,15 @@ export default function Player(p: Props) {
       ['timeupdate', onTime], ['loadedmetadata', onTime], ['progress', onTime],
       ['play', () => { setPlaying(true); showControls(); }],
       ['pause', () => { setPlaying(false); showControls(true); if (!live) p.onProgress(p.channel.id, v.currentTime, v.duration); }],
-      ['waiting', () => setBuffering(true)], ['playing', () => { setBuffering(false); setPlaying(true); setBlocked(false); showControls(); }],
+      ['waiting', () => setBuffering(true)], ['playing', () => { setBuffering(false); setPlaying(true); setBlocked(false); setRecovering(null); showControls(); }],
       ['volumechange', () => { setMuted(v.muted); setVolume(v.volume); }],
-      ['error', () => { setError('This stream could not be played.'); setBuffering(false); }],
+      ['error', () => {
+        /* native-HLS failures surface here (hls.js intercepts its own). Live
+           channels get the recovery ladder before the visible error; VOD
+           usually means a genuinely broken file. */
+        if (live) beginRecovery('Stream error', true);
+        else { setError('This stream could not be played.'); setBuffering(false); }
+      }],
     ];
     handlers.forEach(([evt, fn]) => v.addEventListener(evt, fn));
     const onEnded = () => {
@@ -629,8 +673,9 @@ export default function Player(p: Props) {
   }, [nextCountdown?.ep]);
 
   useEffect(() => {
-    /* after channel change, save position is not needed */
+    /* after channel change, save position is not needed; recovery budget starts fresh */
     setTime(0); setDuration(0);
+    recovery.current = { count: 0, lastAttempt: 0, hardFails: 0 };
   }, [p.channel.id]);
 
   /* ---------- gestures ---------- */
@@ -798,17 +843,76 @@ export default function Player(p: Props) {
     holdStepRef.current = 10;
     setHoldStep(10);
   }
-  function goLive() {
+  /* ---------- live edge ---------- */
+  /* hls.js knows its sync position; native HLS falls back to the end of the
+     sliding window */
+  function liveEdge(): number {
     const v = videoRef.current;
-    if (!v) return;
+    if (!v) return NaN;
     const h = hlsRef.current;
     const edge = h && h.liveSyncPosition != null && Number.isFinite(h.liveSyncPosition) ? h.liveSyncPosition
       : Number.isFinite(v.duration) && v.duration > 0 ? v.duration - 0.5 : NaN;
-    if (Number.isFinite(edge)) {
-      v.currentTime = edge as number;
+    return edge as number;
+  }
+
+  function goLive() {
+    const v = videoRef.current;
+    const edge = liveEdge();
+    if (v && Number.isFinite(edge)) {
+      v.currentTime = edge;
       requestPlay();
     }
     showControls(true);
+  }
+
+  /* ---------- stream recovery (anti-freeze) ----------
+     IPTV sources drop out constantly: CDNs blip, playlists stall, decoders
+     choke. Recovery is graduated and budgeted:
+       soft — restart hls.js loading in place (or reload the native src) and
+              snap back to the live edge; keeps the decoder and the buffer
+       hard — full teardown: re-run the attach effect with a fresh hls.js
+              instance / src (nonce bump)
+     Attempts back off 0,1,2,4,8s. Three soft attempts, then hard reloads;
+     four hard reloads without settling → visible error with Retry. The
+     budget refills after ~20s of steady playback or a fresh manifest parse. */
+  function softRecover() {
+    const v = videoRef.current;
+    if (!v) return;
+    const h = hlsRef.current;
+    if (h) {
+      /* restart playlist/fragment loading in place */
+      try { h.stopLoad(); h.startLoad(); } catch {}
+    } else {
+      try { v.load(); } catch {}
+    }
+    /* a stall usually means the buffer fell behind the provider's sliding
+       window — resume at the live edge, not on segments about to expire */
+    const edge = liveEdge();
+    if (live && Number.isFinite(edge) && edge - v.currentTime > 2) {
+      try { v.currentTime = edge; } catch {}
+    }
+    requestPlay();
+  }
+
+  function beginRecovery(reason: string, forceHard = false) {
+    const now = Date.now();
+    const rec = recovery.current;
+    const wait = rec.count === 0 ? 0 : Math.min(8000, 1000 * 2 ** (rec.count - 1));
+    if (now - rec.lastAttempt < wait) return;
+    if (rec.hardFails >= 4) {
+      /* reconnecting isn't sticking — surface it instead of looping forever */
+      setRecovering(null);
+      setBuffering(false);
+      setError(live ? 'This channel keeps dropping out. Tap retry to reconnect.' : 'This stream could not be played.');
+      return;
+    }
+    rec.count += 1;
+    rec.lastAttempt = now;
+    const hard = forceHard || rec.count > 3;
+    if (hard) rec.hardFails += 1;
+    setRecovering(`${reason} — reconnecting (attempt ${rec.count})`);
+    if (hard) setNonce((n) => n + 1);
+    else softRecover();
   }
   function setRate2(r: number) { const v = videoRef.current; if (v) { v.playbackRate = r; setRate(r); } }
   function setLevel(i: number) { setCurLevel(i); if (hlsRef.current) hlsRef.current.currentLevel = i; }
@@ -914,7 +1018,15 @@ export default function Player(p: Props) {
           <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 px-8 text-center bg-black/75">
             <button onClick={p.onClose} aria-label="Close player" className="press absolute top-[max(12px,var(--safe-t,0px))] left-3 p-2 text-white"><IconClose className="w-6 h-6" /></button>
             <div className="text-white/90 text-[15px]">{error}</div>
-            <button onClick={(e) => { e.stopPropagation(); const v = videoRef.current; if (v) { v.load(); requestPlay(); } setError(''); setBuffering(true); showControls(true); }}
+            <button onClick={(e) => {
+              e.stopPropagation();
+              /* full clean reconnect — fresh hls.js instance / src via the
+                 attach effect, never a bare video.load() */
+              setError(''); setBuffering(true); setRecovering(null);
+              recovery.current = { count: 0, lastAttempt: 0, hardFails: 0 };
+              setNonce((n) => n + 1);
+              showControls(true);
+            }}
               className="press px-5 py-2.5 rounded-xl bg-accent text-black text-[15px] font-bold">Retry</button>
             <a href={p.channel.url} target="_blank" rel="noreferrer" className="press text-white/50 text-xs underline">Open stream URL</a>
           </div>
@@ -936,11 +1048,13 @@ export default function Player(p: Props) {
           </div>
         )}
 
-        {/* frozen picture */}
-        {frozen && !error && (
+        {/* reconnecting banner — shown while the recovery ladder works;
+            clears the moment playback resumes ('playing' event) */}
+        {recovering && !error && (
           <div className="absolute top-[calc(12px+var(--safe-t,0px))] inset-x-0 flex justify-center z-20 pointer-events-none">
-            <div className="bg-red-500/90 text-white text-[13px] font-semibold px-4 py-2 rounded-full shadow-xl">
-              Channel frozen — reconnecting…
+            <div className="bg-red-500/90 text-white text-[13px] font-semibold px-4 py-2 rounded-full shadow-xl flex items-center gap-2">
+              <span className="w-3 h-3 shrink-0 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+              {recovering}
             </div>
           </div>
         )}

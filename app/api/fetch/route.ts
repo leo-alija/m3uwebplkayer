@@ -147,7 +147,12 @@ export async function GET(req: NextRequest) {
        correct base for relative URLs inside the manifest. */
     if (hls && text.includes('#EXTM3U')) {
       return new NextResponse(rewriteManifest(text, target.href, req.nextUrl.origin), {
-        headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        headers: {
+          'Content-Type': 'application/vnd.apple.mpegurl',
+          /* live playlists must never come from a cache — a stale copy repeats
+             old media sequence numbers until the player starves and freezes */
+          'Cache-Control': 'no-store',
+        },
       });
     }
     return new NextResponse(text, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
